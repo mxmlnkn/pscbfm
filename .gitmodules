@@ -1,0 +1,6 @@
+[submodule "mkPython"]
+	path = mkPython
+	url = ./extern/mkPython/
+[submodule "extern/mkPython"]
+	path = extern/mkPython
+	url = ./extern/mkPython/
