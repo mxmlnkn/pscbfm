@@ -63,3 +63,7 @@ output/*
 build
 CMakeFiles
 CMakeCache.txt
+# This might lead to forgetting some files, but all plot images are in pdf and png form and only pdf is used for LaTeX, so yeah
+*.png
+# important, but can be huge, so for now, only add when forced!
+*.dat

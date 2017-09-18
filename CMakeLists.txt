@@ -2,6 +2,32 @@ cmake_minimum_required( VERSION 3.1 )
 
 set( CMAKE_CXX_STANDARD 11 ) # needs CMake 3.1. Need C++11 for auto-keyword and list initializers ... I sure have gotten lazy :S
 
+
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -msse2 -mssse3 -fexpensive-optimizations" )
+set(CMAKE_CXX_FLAGS_DEBUG   "${CMAKE_CXX_FLAGS_DEBUG} -O0 -Wall -Wextra -DNDEBUG" )
+
+#define value of CMAKE_BUILD_TYPE depending on input
+if( NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Release" )
+    set( CMAKE_BUILD_TYPE "Release" ) #default build type is Release
+elseif( CMAKE_BUILD_TYPE STREQUAL "Debug" )
+    set( CMAKE_BUILD_TYPE "Debug" )
+else()
+    message( FATAL_ERROR "Invalid build type ${CMAKE_BUILD_TYPE} specified." )
+endif()
+
+#output depending on build type
+if( CMAKE_BUILD_TYPE STREQUAL "Release" )
+    set( CMAKE_VERBOSE_MAKEFILE 0 )
+    message( "Build type is ${CMAKE_BUILD_TYPE}" )
+    message( "USING CXX COMPILER FLAGS ${CMAKE_CXX_FLAGS_RELEASE}" )
+elseif( CMAKE_BUILD_TYPE STREQUAL "Debug" )
+    set( CMAKE_VERBOSE_MAKEFILE 1 )
+    message( "Build type is ${CMAKE_BUILD_TYPE}" )
+    message( "USING CXX COMPILER FLAGS ${CMAKE_CXX_FLAGS_DEBUG}" )
+endif()
+
+
+
 find_path( LEMONADE_INCLUDE_DIR
     NAMES
         LeMonADE/core/ConfigureSystem.h
