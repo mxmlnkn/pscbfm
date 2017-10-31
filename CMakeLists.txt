@@ -73,7 +73,8 @@ endif()
 if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
     if( PULL_LEMONADE )
         message( "Installing LeMonADE ..." )
-        # every command own execute process because of this bug:
+        # every command runs in its own process, that's why this workaround
+        # of calling sh with a script was used
         execute_process(
             # installing into the source is very unclean, but as 80% is
             # header only it will simply result in only the compiled
