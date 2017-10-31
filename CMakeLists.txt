@@ -109,11 +109,12 @@ endif()
 include_directories( SYSTEM ${LEMONADE_INCLUDE_DIR} )
 link_directories   ( SYSTEM ${LEMONADE_LIBRARY_DIR} )
 
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
-add_executable( singleLinearChain ${SOURCE_FILES} )
-target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} )
+#file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
+#add_executable( singleLinearChain ${SOURCE_FILES} )
+#target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} )
+#
+#file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
+#add_executable( mainTestAll ${SOURCE_FILES} )
+#target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
-add_executable( mainTestAll ${SOURCE_FILES} )
-target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
-
+add_subdirectory(projects)
