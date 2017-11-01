@@ -109,13 +109,13 @@ endif()
 include_directories( SYSTEM ${LEMONADE_INCLUDE_DIR} )
 link_directories   ( SYSTEM ${LEMONADE_LIBRARY_DIR} )
 
-#file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
-#add_executable( singleLinearChain ${SOURCE_FILES} )
-#target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} )
-#
-#file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
-#add_executable( mainTestAll ${SOURCE_FILES} )
-#target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
+file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
+add_executable( singleLinearChain ${SOURCE_FILES} )
+target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} )
+
+file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
+add_executable( mainTestAll ${SOURCE_FILES} )
+target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
 set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
 add_subdirectory(projects)
