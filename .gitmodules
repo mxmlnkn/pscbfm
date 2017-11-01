@@ -6,4 +6,4 @@
 	url = ./extern/mkPython/
 [submodule "extern/LeMonADE"]
 	path = extern/LeMonADE
-	url = https://github.com/LeMonADE-project/LeMonADE.git
+	url = https://github.com/mxmlnkn/LeMonADE.git

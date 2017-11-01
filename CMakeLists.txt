@@ -117,4 +117,5 @@ link_directories   ( SYSTEM ${LEMONADE_LIBRARY_DIR} )
 #add_executable( mainTestAll ${SOURCE_FILES} )
 #target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
+set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
 add_subdirectory(projects)
