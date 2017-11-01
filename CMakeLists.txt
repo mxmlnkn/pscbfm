@@ -117,5 +117,22 @@ file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
 add_executable( mainTestAll ${SOURCE_FILES} )
 target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
+find_package( CUDA REQUIRED )
 set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
-add_subdirectory(projects)
+message( "Compile for sm_${CUDA_ARCH}" )
+# Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
+set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++11 -lineinfo -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} )
+
+# parallel Sc BFM
+cuda_add_executable( SimulatorCUDAGPUScBFM_AB_Type
+    src/pscBFMLegacy/UpdaterGPUScBFM_AB_Type.cu
+    src/pscBFMLegacy/mainCUDASimulatorGPUScBFM_AB_Type.cpp
+)
+target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type ${LEMONADE_LIBRARY} )
+
+# Bcc BFM
+cuda_add_executable( GPUBccBFMMeltLinearChains
+    src/bccBFMLegacy/UpdaterGPUBccBFM.cu
+    src/bccBFMLegacy/mainCUDASimulatorMelt.cpp
+)
+target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )

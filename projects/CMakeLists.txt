@@ -1,2 +1,0 @@
-add_subdirectory(GPUBccBFMMeltLinearChains)
-add_subdirectory(GPUScBFM_AB_Type)
