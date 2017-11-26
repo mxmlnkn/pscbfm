@@ -5,14 +5,14 @@ set( CMAKE_CXX_STANDARD 11 ) # needs CMake 3.1. Need C++11 for auto-keyword and 
 set( LEMONADE_SUBMODULE_FOLDER "./extern/LeMonADE" )
 option( PULL_LEMONADE "If enabled LeMonADE will be downloaded and compiled in the folder ${LEMONADE_SUBMODULE_FOLDER}" OFF )
 
-set( CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -msse2 -mssse3 -fexpensive-optimizations" )
-set( CMAKE_CXX_FLAGS_DEBUG   "${CMAKE_CXX_FLAGS_DEBUG} -O0 -Wall -Wextra -DNDEBUG" )
+set( CMAKE_CXX_FLAGS "-Wall -Wextra" )
+set( CMAKE_CXX_FLAGS_RELEASE "-O3 -msse2 -mssse3 -fexpensive-optimizations -DNDEBUG" )
+set( CMAKE_CXX_FLAGS_DEBUG   "-g -O0" )
 
-if( NOT CMAKE_BUILD_TYPE OR CMAKE_BUILD_TYPE STREQUAL "Release" )
+if( NOT CMAKE_BUILD_TYPE )
     set( CMAKE_BUILD_TYPE "Release" ) #default build type is Release
-elseif( CMAKE_BUILD_TYPE STREQUAL "Debug" )
-    set( CMAKE_BUILD_TYPE "Debug" )
-else()
+endif()
+if( NOT CMAKE_BUILD_TYPE STREQUAL "Debug" AND NOT CMAKE_BUILD_TYPE STREQUAL "Release" )
     message( FATAL_ERROR "Invalid build type ${CMAKE_BUILD_TYPE} specified." )
 endif()
 
@@ -122,8 +122,14 @@ set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default
 message( "Compile for sm_${CUDA_ARCH}" )
 # Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
 set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++11 -lineinfo -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} )
+if( CMAKE_BUILD_TYPE STREQUAL "Debug" )
+    set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -g )
+endif()
 
 # parallel Sc BFM
+message( " CMAKE_CXX_FLAGS         = ${CMAKE_CXX_FLAGS}" )
+message( " CMAKE_CXX_FLAGS_RELEASE = ${CMAKE_CXX_FLAGS_RELEASE}" )
+message( " CMAKE_CXX_FLAGS_DEBUG   = ${CMAKE_CXX_FLAGS_DEBUG}" )
 cuda_add_executable( SimulatorCUDAGPUScBFM_AB_Type
     src/pscBFMLegacy/UpdaterGPUScBFM_AB_Type.cu
     src/pscBFMLegacy/mainCUDASimulatorGPUScBFM_AB_Type.cpp
@@ -136,3 +142,4 @@ cuda_add_executable( GPUBccBFMMeltLinearChains
     src/bccBFMLegacy/mainCUDASimulatorMelt.cpp
 )
 target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )
+
