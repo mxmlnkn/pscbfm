@@ -89,7 +89,7 @@ if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
             "
             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         )
-        if ( NOT EXISTS "${PROJECT_SOURCE_DIR}/${LEMONADE_SUBMODULE_FOLDER}/lib/lib${LEMONADE_LIBRARY}" )
+        if ( NOT EXISTS "${PROJECT_SOURCE_DIR}/${LEMONADE_SUBMODULE_FOLDER}/lib/lib${LEMONADE_LIBRARY}.a" )
             message( FATAL_ERROR "Something went wrong when trying to install LeMonADE from source!" )
         endif()
         set( LEMONADE_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/${LEMONADE_SUBMODULE_FOLDER}/include" )
@@ -121,7 +121,7 @@ find_package( CUDA REQUIRED )
 set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
 message( "Compile for sm_${CUDA_ARCH}" )
 # Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
-set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++11 -lineinfo -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} )
+set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++11 -lineinfo -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} -Xcompiler -fPIC )
 if( CMAKE_BUILD_TYPE STREQUAL "Debug" )
     set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -g )
 endif()
@@ -142,4 +142,3 @@ cuda_add_executable( GPUBccBFMMeltLinearChains
     src/bccBFMLegacy/mainCUDASimulatorMelt.cpp
 )
 target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )
-
