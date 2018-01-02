@@ -137,8 +137,8 @@ cuda_add_executable( SimulatorCUDAGPUScBFM_AB_Type
 target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type ${LEMONADE_LIBRARY} )
 
 # Bcc BFM
-cuda_add_executable( GPUBccBFMMeltLinearChains
-    src/bccBFMLegacy/UpdaterGPUBccBFM.cu
-    src/bccBFMLegacy/mainCUDASimulatorMelt.cpp
-)
-target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )
+#cuda_add_executable( GPUBccBFMMeltLinearChains
+#    src/bccBFMLegacy/UpdaterGPUBccBFM.cu
+#    src/bccBFMLegacy/mainCUDASimulatorMelt.cpp
+#)
+#target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )
