@@ -26,7 +26,6 @@ elseif( CMAKE_BUILD_TYPE STREQUAL "Debug" )
     message( "USING CXX COMPILER FLAGS ${CMAKE_CXX_FLAGS_DEBUG}" )
 endif()
 
-
 # find LeMonADE headers and compiled library
 find_path( LEMONADE_INCLUDE_DIR
     NAMES
@@ -119,12 +118,15 @@ target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
 find_package( CUDA REQUIRED )
 set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
+message( "CUDA_INCLUDE_DIR " )
 message( "Compile for sm_${CUDA_ARCH}" )
 # Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
 set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++11 -lineinfo -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} -Xcompiler -fPIC )
 if( CMAKE_BUILD_TYPE STREQUAL "Debug" )
     set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -g )
 endif()
+
+# no find_package for thrust needed, as it should be in the include folder for CUDA
 
 # parallel Sc BFM
 message( " CMAKE_CXX_FLAGS         = ${CMAKE_CXX_FLAGS}" )
