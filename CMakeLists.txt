@@ -144,3 +144,7 @@ target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type ${LEMONADE_LIBRARY} )
 #    src/bccBFMLegacy/mainCUDASimulatorMelt.cpp
 #)
 #target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )
+
+# CLI for coloring a BFM file
+add_executable( colorBFM src/pscBFMLegacy/mainColorBFM.cpp )
+target_link_libraries( colorBFM ${LEMONADE_LIBRARY} )
