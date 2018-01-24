@@ -8,6 +8,14 @@ option( PULL_LEMONADE "If enabled LeMonADE will be downloaded and compiled in th
 set( CMAKE_CXX_FLAGS "-Wall -Wextra" )
 set( CMAKE_CXX_FLAGS_RELEASE "-O3 -msse2 -mssse3 -fexpensive-optimizations -DNDEBUG" )
 set( CMAKE_CXX_FLAGS_DEBUG   "-g -O0" )
+message( "CUDA_HOST_COMPILER = ${CUDA_HOST_COMPILER}")
+if( CUDA_HOST_COMPILER )
+    message( "Custom CUDA-Host compiler chosen. In order to ensure ABI compatibility we have to use the same compiler for non-CUDA code." )
+    message( "If you haven't done so, then you also need to compile LeMonADE with the chosen compiler!" )
+    message( "E.g. use: cmake -D CMAKE_CXX_COMPILER <cpp compiler path> .." )
+    set( CMAKE_CXX_COMPILER ${CUDA_HOST_COMPILER} )
+    # set( CMAKE_CXX_COMPILER ${CUDA_HOST_COMPILER} ) # could try to substitute g++ with gcc but would be unsecure, plus we don't really need it I think.
+endif()
 
 if( NOT CMAKE_BUILD_TYPE )
     set( CMAKE_BUILD_TYPE "Release" ) #default build type is Release
@@ -83,7 +91,8 @@ if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
             cd ${LEMONADE_SUBMODULE_FOLDER}                                 && \
             mkdir -p build install                                          && \
             cd build                                                        && \
-            cmake -DINSTALLDIR_LEMONADE=.. DCMAKE_INSTALL_PREFIX=.. ..      && \
+            cmake -DCMAKE_CXX_COMPILER='${CMAKE_CXX_COMPILER}'                 \
+                  -DINSTALLDIR_LEMONADE=.. DCMAKE_INSTALL_PREFIX=.. ..      && \
             make install                                                       \
             "
             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
