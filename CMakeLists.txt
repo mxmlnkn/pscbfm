@@ -157,3 +157,32 @@ target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type ${LEMONADE_LIBRARY} )
 # CLI for coloring a BFM file
 add_executable( colorBFM src/pscBFMLegacy/mainColorBFM.cpp )
 target_link_libraries( colorBFM ${LEMONADE_LIBRARY} )
+
+
+
+
+### Benchmarks:
+
+# https://stackoverflow.com/questions/7787823/cmake-how-to-get-the-name-of-all-subdirectories-of-a-directory
+
+macro( subdirlist result curdir )
+    file( GLOB children RELATIVE ${curdir} ${curdir}/* )
+    set( dirlist "" )
+    foreach( child ${children} )
+        if( IS_DIRECTORY ${curdir}/${child} )
+            list( APPEND dirlist ${child} )
+        endif()
+    endforeach()
+    set( ${result} ${dirlist} )
+endmacro()
+
+message( "=== Configuring Benchmarks ===" )
+subdirlist( lsubdirs "${PROJECT_SOURCE_DIR}/benchmarks" ) # must be full path!
+foreach( subdir ${lsubdirs} )
+    message( "Configuring benchmarks/${subdir}" )
+    cuda_add_executable( benchmark-${subdir}
+        "benchmarks/${subdir}/UpdaterGPUScBFM_AB_Type.cu"
+        "benchmarks/${subdir}/mainCUDASimulatorGPUScBFM_AB_Type.cpp"
+    )
+    target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} )
+endforeach()
