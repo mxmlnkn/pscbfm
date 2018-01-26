@@ -16,6 +16,13 @@ if( CUDA_HOST_COMPILER )
     set( CMAKE_CXX_COMPILER ${CUDA_HOST_COMPILER} )
     # set( CMAKE_CXX_COMPILER ${CUDA_HOST_COMPILER} ) # could try to substitute g++ with gcc but would be unsecure, plus we don't really need it I think.
 endif()
+# Warn on a time consuming known problem, i.e. linker errors when trying to link C++ code with gcc instead of g++
+if ( "${CUDA_HOST_COMPILER}" MATCHES ".*/gcc[^/]*$" )
+    message( FATAL_ERROR "CUDA_HOST_COMPILER must not be a gcc compiler, use g++ instead!" )
+endif()
+if ( "${CMAKE_CXX_COMPILER}" MATCHES ".*/gcc[^/]*$" )
+    message( FATAL_ERROR "CMAKE_CXX_COMPILER must not be a gcc compiler, use g++ instead!" )
+endif()
 
 if( NOT CMAKE_BUILD_TYPE )
     set( CMAKE_BUILD_TYPE "Release" ) #default build type is Release
