@@ -13,15 +13,20 @@ if( CUDA_HOST_COMPILER )
     message( "Custom CUDA-Host compiler chosen. In order to ensure ABI compatibility we have to use the same compiler for non-CUDA code." )
     message( "If you haven't done so, then you also need to compile LeMonADE with the chosen compiler!" )
     message( "E.g. use: cmake -D CMAKE_CXX_COMPILER <cpp compiler path> .." )
+    # Warn on a time consuming known problem, i.e. linker errors when trying to link C++ code with gcc instead of g++
+    # this happens, because it seems that module environment was configured to set CUDA_HOST_COMPILER environment variable and it seems that CMake actually searches for options in environment variables ...then again this doesn't seem to be the case, neither is cmake aliased Oo? where is this coming from ...
+    if ( "${CUDA_HOST_COMPILER}" MATCHES ".*/gcc[^/]*$" )
+        message( WARNING "CUDA_HOST_COMPILER must not be a gcc compiler, use g++ instead!" )
+        string( REGEX REPLACE "(.*)/gcc([^/]*)$" "\\1/g++\\2" CUDA_HOST_COMPILER ${CUDA_HOST_COMPILER} )
+        message( STATUS "Changed CUDA_HOST_COMPILER to '${CUDA_HOST_COMPILER}'" )
+    endif()
     set( CMAKE_CXX_COMPILER ${CUDA_HOST_COMPILER} )
     # set( CMAKE_CXX_COMPILER ${CUDA_HOST_COMPILER} ) # could try to substitute g++ with gcc but would be unsecure, plus we don't really need it I think.
 endif()
-# Warn on a time consuming known problem, i.e. linker errors when trying to link C++ code with gcc instead of g++
-if ( "${CUDA_HOST_COMPILER}" MATCHES ".*/gcc[^/]*$" )
-    message( FATAL_ERROR "CUDA_HOST_COMPILER must not be a gcc compiler, use g++ instead!" )
-endif()
 if ( "${CMAKE_CXX_COMPILER}" MATCHES ".*/gcc[^/]*$" )
-    message( FATAL_ERROR "CMAKE_CXX_COMPILER must not be a gcc compiler, use g++ instead!" )
+    message( "CMAKE_CXX_COMPILER must not be a gcc compiler, use g++ instead!" )
+    string( REGEX REPLACE "(.*)/gcc([^/]*)$" "\\1/g++\\2" CMAKE_CXX_COMPILER ${CMAKE_CXX_COMPILER} )
+    message( STATUS "Changed CMAKE_CXX_COMPILER to '${CMAKE_CXX_COMPILER}'" )
 endif()
 
 if( NOT CMAKE_BUILD_TYPE )
