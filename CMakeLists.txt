@@ -188,6 +188,9 @@ macro( subdirlist result curdir )
     set( ${result} ${dirlist} )
 endmacro()
 
+# don't need warnigns for the older versions, don't gonna optimize them again in respect to warnings
+set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w" )
+set( CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -w" )
 message( "=== Configuring Benchmarks ===" )
 subdirlist( lsubdirs "${PROJECT_SOURCE_DIR}/benchmarks" ) # must be full path!
 foreach( subdir ${lsubdirs} )
