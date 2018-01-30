@@ -47,6 +47,10 @@ elseif( CMAKE_BUILD_TYPE STREQUAL "Debug" )
     message( "USING CXX COMPILER FLAGS ${CMAKE_CXX_FLAGS_DEBUG}" )
 endif()
 
+if ( NOT EXISTS "${PROJECT_SOURCE_DIR}/extern/Fundamental/Fundamental.hpp" )
+    execute_process( COMMAND git submodule update --recursive )
+endif()
+
 # find LeMonADE headers and compiled library
 find_path( LEMONADE_INCLUDE_DIR
     NAMES
@@ -122,6 +126,9 @@ else()
     message( "Found LeMonADE at ${LEMONADE_INCLUDE_DIR} and ${LEMONADE_LIBRARY_DIR}" )
 endif()
 
+include_directories( "extern/" ) # Fundamental
+add_executable( findMaxNeighbors ../src/findMaxNeighbors.cpp )
+target_link_libraries( findMaxNeighbors )
 
 
 # Declare include SYSTEM, in order to suppress C++11-induced warnings from
