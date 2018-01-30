@@ -4,6 +4,7 @@ set( CMAKE_CXX_STANDARD 11 ) # needs CMake 3.1. Need C++11 for auto-keyword and 
 
 set( LEMONADE_SUBMODULE_FOLDER "./extern/LeMonADE" )
 option( PULL_LEMONADE "If enabled LeMonADE will be downloaded and compiled in the folder ${LEMONADE_SUBMODULE_FOLDER}" OFF )
+option( BUILD_BENCHMARKS "If enabled possible tens of versions will be compiled in order to compare them" OFF )
 
 set( CMAKE_CXX_FLAGS "-Wall -Wextra" )
 set( CMAKE_CXX_FLAGS_RELEASE "-O3 -msse2 -mssse3 -fexpensive-optimizations -DNDEBUG" )
@@ -142,22 +143,49 @@ set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default
 message( "CUDA_INCLUDE_DIR " )
 message( "Compile for sm_${CUDA_ARCH}" )
 # Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
-set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -std=c++11 -lineinfo -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} -Xcompiler -fPIC )
+set( MINIMAL_CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}
+    -std=c++11 -Xcompiler -fPIC
+    -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH}
+)
+set( BENCHMARK_CUDA_NVCC_FLAGS
+    # Show resource usage such as registers and memory of the GPU code. => will be in make log in benchmarking logs, although I guess this might be a reason to force recompilation before benchmarking
+    -res-usage
+    # Generate line-number information for device code. (for nvvp)
+    --generate-line-info
+    # Interleave source in PTX. May only be used in conjunction with --device-debug or --generate-line-info.
+    --source-in-ptx
+    # https://stackoverflow.com/questions/12388207/interpreting-output-of-ptxas-options-v
+    --ptxas-options=-v
+    # keep intermediary source files (ptx code). Each compilation should set their own --keep-dir!
+    --keep
+)
+if( NOT ${CUDA_VERSION_MAJOR} LESS 9 )
+    # option does not exist in CUDA 7.0.27
+    # http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#ptxas-options (CUDA 9.1.85 docs)
+    set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -Xptxas --warn-on-double-precision-use,--warn-on-local-memory-usage,--warn-on-spills )
+endif()
 if( CMAKE_BUILD_TYPE STREQUAL "Debug" )
     set( CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} -g )
 endif()
 
 # no find_package for thrust needed, as it should be in the include folder for CUDA
 
-# parallel Sc BFM
 message( " CMAKE_CXX_FLAGS         = ${CMAKE_CXX_FLAGS}" )
 message( " CMAKE_CXX_FLAGS_RELEASE = ${CMAKE_CXX_FLAGS_RELEASE}" )
 message( " CMAKE_CXX_FLAGS_DEBUG   = ${CMAKE_CXX_FLAGS_DEBUG}" )
-cuda_add_executable( SimulatorCUDAGPUScBFM_AB_Type
+
+
+# parallel Sc BFM
+set( BIN_NAME "pscbfm" )
+set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
+file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
+set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER}" )
+cuda_add_executable( ${BIN_NAME}
     src/pscBFMLegacy/UpdaterGPUScBFM_AB_Type.cu
     src/pscBFMLegacy/mainCUDASimulatorGPUScBFM_AB_Type.cpp
 )
-target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type ${LEMONADE_LIBRARY} )
+target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} )
+
 
 # Bcc BFM
 #cuda_add_executable( GPUBccBFMMeltLinearChains
@@ -166,10 +194,17 @@ target_link_libraries( SimulatorCUDAGPUScBFM_AB_Type ${LEMONADE_LIBRARY} )
 #)
 #target_link_libraries( GPUBccBFMMeltLinearChains ${LEMONADE_LIBRARY} )
 
+
 # CLI for coloring a BFM file
 add_executable( colorBFM src/pscBFMLegacy/mainColorBFM.cpp )
 target_link_libraries( colorBFM ${LEMONADE_LIBRARY} )
 
+
+# minimalistic gpuinfo tool printing all properties
+set_source_files_properties( src/gpuinfo.cpp PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
+set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} )
+cuda_add_executable( gpuinfo src/gpuinfo.cpp )
+target_link_libraries( gpuinfo )
 
 
 
@@ -188,16 +223,22 @@ macro( subdirlist result curdir )
     set( ${result} ${dirlist} )
 endmacro()
 
-# don't need warnigns for the older versions, don't gonna optimize them again in respect to warnings
-set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w" )
-set( CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -w" )
-message( "=== Configuring Benchmarks ===" )
-subdirlist( lsubdirs "${PROJECT_SOURCE_DIR}/benchmarks" ) # must be full path!
-foreach( subdir ${lsubdirs} )
-    message( "Configuring benchmarks/${subdir}" )
-    cuda_add_executable( benchmark-${subdir}
-        "benchmarks/${subdir}/UpdaterGPUScBFM_AB_Type.cu"
-        "benchmarks/${subdir}/mainCUDASimulatorGPUScBFM_AB_Type.cpp"
-    )
-    target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} )
-endforeach()
+if( BUILD_BENCHMARKS )
+    # don't need warnings for the older versions, don't gonna optimize them again in respect to warnings
+    set( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w" )
+    set( CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -w" )
+    message( "=== Configuring Benchmarks ===" )
+    subdirlist( lsubdirs "${PROJECT_SOURCE_DIR}/benchmarks" ) # must be full path!
+    foreach( subdir ${lsubdirs} )
+        message( "Configuring benchmarks/${subdir}" )
+        set( BIN_NAME "${subdir}" )
+        set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
+        file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
+        set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER}" )
+        cuda_add_executable( benchmark-${subdir}
+            "benchmarks/${subdir}/UpdaterGPUScBFM_AB_Type.cu"
+            "benchmarks/${subdir}/mainCUDASimulatorGPUScBFM_AB_Type.cpp"
+        )
+        target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} )
+    endforeach()
+endif()
