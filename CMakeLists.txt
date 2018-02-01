@@ -83,8 +83,8 @@ find_path( LEMONADE_LIBRARY_DIR
         ${PROJECT_SOURCE_DIR}/extern
     PATH_SUFFIXES
         LeMonADE/lib
-        build/lib
         lib
+        build/lib
     DOC "LeMonADE library location"
 )
 
