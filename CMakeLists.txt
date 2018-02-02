@@ -188,8 +188,8 @@ set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
 file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
 set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER}" )
 cuda_add_executable( ${BIN_NAME}
-    src/pscBFMLegacy/UpdaterGPUScBFM_AB_Type.cu
-    src/pscBFMLegacy/mainCUDASimulatorGPUScBFM_AB_Type.cpp
+    src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
+    src/pscbfm/mainCUDASimulatorGPUScBFM_AB_Type.cpp
 )
 target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} )
 
@@ -203,7 +203,7 @@ target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} )
 
 
 # CLI for coloring a BFM file
-add_executable( colorBFM src/pscBFMLegacy/mainColorBFM.cpp )
+add_executable( colorBFM src/pscbfm/mainColorBFM.cpp )
 target_link_libraries( colorBFM ${LEMONADE_LIBRARY} )
 
 
