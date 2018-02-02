@@ -1,4 +1,4 @@
-#include "pscBFMLegacy/cudacommon.hpp"
+#include "pscbfm/cudacommon.hpp"
 
 int main( void )
 {
