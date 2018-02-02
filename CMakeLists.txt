@@ -58,11 +58,11 @@ find_path( LEMONADE_INCLUDE_DIR
         LeMonADE/core/Ingredients.h
         LeMonADE/utility/TaskManager.h
     PATHS
+        ${PROJECT_SOURCE_DIR}/extern
         ENV LEMONADE_ROOT
         ENV LEMONADE_INCLUDE_DIR
         /usr/local/include
         /usr/include
-        ${PROJECT_SOURCE_DIR}/extern
     PATH_SUFFIXES
         lemonade
         LeMonADE
@@ -76,11 +76,11 @@ find_path( LEMONADE_LIBRARY_DIR
     NAMES
         "lib${LEMONADE_LIBRARY}.a"
     PATHS
+        ${PROJECT_SOURCE_DIR}/extern
         ENV LEMONADE_ROOT
         ENV LEMONADE_LIBRARY_DIR
         /usr/local
         /usr
-        ${PROJECT_SOURCE_DIR}/extern
     PATH_SUFFIXES
         LeMonADE/lib
         lib
