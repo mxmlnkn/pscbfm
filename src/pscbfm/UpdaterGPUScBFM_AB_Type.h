@@ -34,8 +34,8 @@
 #endif
 
 
-// #define MAX_CONNECTIVITY 4 // original connectivity
-#define MAX_CONNECTIVITY 8 // needed for the coloring example
+#define MAX_CONNECTIVITY 4 // original connectivity
+// #define MAX_CONNECTIVITY 8 // needed for the coloring example
 
 //#define NONPERIODICITY
 
