@@ -125,7 +125,133 @@ public:
     };
 private:
     std::vector< MonomerEdges > mNeighbors;
-    MirroredVector< MonomerEdgesCompressed > * mNeighborsSorted; /* stores the IDs of all neighbors as is needed to check for bond length restrictions. But after the sorting of mPolymerSystem the IDs also changed. And as I don't want to push iToiNew and iNewToi to the GPU instead I just change the IDs for all neighbors. Plus the array itself gets rearranged to the new AAA...BBB...CC... ordering */
+    /**
+     * stores the IDs of all neighbors as is needed to check for the bond
+     * set / length restrictions.
+     * But after the sorting of mPolymerSystem the IDs also changed.
+     * And as I don't want to push iToiNew and iNewToi to the GPU instead
+     * I just change the IDs for all neighbors. Plus the array itself gets
+     * rearranged to the new AAA...BBB...CC... ordering
+     *
+     * In the next level optimization this sorting, i.e. A{neighbor 1234}A...
+     * Needs to get also resorted to:
+     *
+     * @verbatim
+     *       nMonomersPaddedInGroup[0] = 8
+     *    <---------------------------->
+     *    A11 A21 A31 A41 A51  0   0   0
+     *    A21 A22 A32 A42 A52  0   0   0
+     *    ...
+     *    nMonomersPaddedInGroup[1] = 4
+     *    <------------>
+     * +> B11 B21  0   0
+     * |  B12 B22  0   0
+     * |  ...
+     * +-- at index offset \sum_{i<s} nMonomersPaddedInGroup[i] * MAX_CONNECTIVITY
+     *     which is NOT equal to iSubGroupOffset[s] * MAX_CONNECTIVITY if the
+     *     padding is different per species!
+     * @endverbatim
+     *
+     * where Aij denotes the j-th neighbor of monomer i, such that parallel
+     * access over all monomers of one species to the 1st,2nd,... neighbor
+     * is linear in memory.
+     * Having A11, A21, B11 aligned instead of only A11,B11,C11,... would be
+     * optimal.
+     *
+     * Because the alignment of the PolymerSystem has more data, its alignment
+     * is a harder condition than the alignment of mNeighbors, therefore we
+     * don't have to recalculate everything again, and instead use the
+     * alignments given as number of elements in iSubGroupOffset.
+     * But the offsets are not enough, better would be a species-wise padding
+     * number, i.e. nMonomersPaddedInGroup[i] = iSubGroupOffset[s+1] -
+     * iSubGroupOffset[s] and the last entry would have to be recalculated
+     *   -> just set this in the same loop where iSubGroupOffset is calculated
+     *
+     * Therefore the access to the j-th neighbor of monomer i of species s
+     * would be ... too complicated, I need a new class for this problem.
+     */
+    MirroredVector< uint32_t > * mNeighborsSorted;
+    /**
+     * For each species this stores the
+     *  - max. number of neighbors
+     *  - location in memory for the species edge matrix
+     *  - number of elements / monomers
+     *  - pitched number of monomers / bytes to get alignment
+     */
+    template< typename T >
+    struct AlignedMatrices
+    {
+        using value_type = T;
+        size_t mnBytesAlignment;
+        /* bytes one row takes up ( >= nCols * sizeof(T) ) */
+        struct MatrixMemoryInfo {
+            size_t nRows, nCols, iOffsetBytes, nBytesPitch;
+        };
+        std::vector< MatrixMemoryInfo > mMatrices;
+
+        inline AlignedMatrices( size_t rnBytesAlignment = 512u )
+         : mnBytesAlignment( rnBytesAlignment )
+        {
+            /* this simplifies some "recursive" calculations */
+            MatrixMemoryInfo m;
+            m.nRows        = 0;
+            m.nCols        = 0;
+            m.iOffsetBytes = 0;
+            m.nBytesPitch  = 0;
+            mMatrices.push_back( m );
+        }
+
+        inline void newMatrix
+        (
+            size_t const nRows,
+            size_t const nCols
+        )
+        {
+            auto const & l = mMatrices[ mMatrices.size()-1 ];
+            MatrixMemoryInfo m;
+            m.nRows        = nRows;
+            m.nCols        = nCols;
+            m.iOffsetBytes = l.iOffsetBytes + l.nRows * l.nBytesPitch;
+            m.nBytesPitch  = ceilDiv( nCols * sizeof(T), mnBytesAlignment ) * mnBytesAlignment;
+            mMatrices.push_back( m );
+        }
+
+        inline size_t getMatrixOffsetBytes( size_t const iMatrix ) const
+        {
+            /* 1+ because of dummy 0-th element */
+            return mMatrices.at( 1+iMatrix ).iOffsetBytes;
+        }
+        inline size_t getMatrixPitchBytes( size_t const iMatrix ) const
+        {
+            return mMatrices.at( 1+iMatrix ).nBytesPitch;
+        }
+        inline size_t getRequiredBytes( void ) const
+        {
+            auto const & l = mMatrices[ mMatrices.size()-1 ];
+            return l.iOffsetBytes + l.nRows * l.nBytesPitch;
+        }
+
+        inline size_t bytesToElements( size_t const nBytes ) const
+        {
+            assert( nBytes / sizeof(T) * sizeof(T) == nBytes );
+            return nBytes / sizeof(T);
+        }
+
+        inline size_t getMatrixOffsetElements( size_t const iMatrix ) const
+        {
+            return bytesToElements( getMatrixOffsetBytes( iMatrix ) );
+        }
+        inline size_t getMatrixPitchElements( size_t const iMatrix ) const
+        {
+            return bytesToElements( getMatrixPitchBytes( iMatrix ) );
+        }
+        inline size_t getRequiredElements( void ) const
+        {
+            return bytesToElements( getRequiredBytes() );
+        }
+    };
+
+    AlignedMatrices< uint32_t > mNeighborsSortedInfo;
 
     uint32_t   mBoxX     ;
     uint32_t   mBoxY     ;
