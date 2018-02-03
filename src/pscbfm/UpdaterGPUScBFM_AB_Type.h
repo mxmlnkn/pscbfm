@@ -87,6 +87,21 @@ private:
      */
     std::vector< intCUDA > mPolymerSystem;
     MirroredVector< intCUDA > * mPolymerSystemSorted;
+    /**
+     * These are to be used for storing the flags and chosen direction of
+     * the old property tag.
+     *      4  3  2  1  0
+     *    +--+--+--+--+--+
+     *    |  dir   |move |
+     *    +--+--+--+--+--+
+     * These are currently temporary vectors only written and read to from
+     * the GPU, so MirroredVector isn't necessary, but it's easy to use and
+     * could be nice for debugging (e.g. to replace the count kernels)
+     */
+public:
+    using T_Flags = uint8_t; // uint16_t, uint32_t
+private:
+    MirroredVector< T_Flags > * mPolymerFlags;
 
     static auto constexpr nBytesAlignment    = 512u;
     static auto constexpr nElementsAlignment = nBytesAlignment / ( 4u * sizeof( intCUDA ) );
