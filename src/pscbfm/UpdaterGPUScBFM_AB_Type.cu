@@ -375,15 +375,15 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
 using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    intCUDA           * const dpPolymerSystem        ,
-    T_Flags           * const dpPolymerFlags         ,
-    uint32_t            const iOffset                ,
-    uint8_t           * const dpLatticeTmp           ,
-    uint32_t          * const dpNeighbors            ,
-    uint32_t            const rNeighborsPitchElements,
-    uint32_t            const nMonomers              ,
-    uint32_t            const rSeed                  ,
-    cudaTextureObject_t const texLatticeRefOut
+    intCUDA     const * const  __restrict__ dpPolymerSystem        ,
+    T_Flags           * const  __restrict__ dpPolymerFlags         ,
+    uint32_t            const               iOffset                ,
+    uint8_t           * const  __restrict__ dpLatticeTmp           ,
+    uint32_t    const * const  __restrict__ dpNeighbors            ,
+    uint32_t            const               rNeighborsPitchElements,
+    uint32_t            const               nMonomers              ,
+    uint32_t            const               rSeed                  ,
+    cudaTextureObject_t const               texLatticeRefOut
 )
 {
     int const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -391,9 +391,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
         return;
 
     auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
-    intCUDA const & x0         = data.x;
-    intCUDA const & y0         = data.y;
-    intCUDA const & z0         = data.z;
+    intCUDA const & x0 = data.x;
+    intCUDA const & y0 = data.y;
+    intCUDA const & z0 = data.z;
     auto const properties = dpPolymerFlags[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     uintCUDA const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
@@ -509,21 +509,21 @@ __global__ void kernelCountFilteredCheck
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    intCUDA             * const dpPolymerSystem  ,
-    T_Flags             * const dpPolymerFlags   ,
-    uint8_t             * const dpLattice        ,
-    uint32_t              const nMonomers        ,
-    cudaTextureObject_t   const texLatticeTmp
+    intCUDA       const * const __restrict__ dpPolymerSystem  ,
+    T_Flags             * const __restrict__ dpPolymerFlags   ,
+    uint8_t             * const __restrict__ dpLattice        ,
+    uint32_t              const              nMonomers        ,
+    cudaTextureObject_t   const              texLatticeTmp
 )
 {
     int const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
     if ( iMonomer >= nMonomers )
         return;
 
-    auto data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
-    intCUDA & x0         = data.x;
-    intCUDA & y0         = data.y;
-    intCUDA & z0         = data.z;
+    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    intCUDA const & x0 = data.x;
+    intCUDA const & y0 = data.y;
+    intCUDA const & z0 = data.z;
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & 1 ) == 0 )    // impossible move
         return;
@@ -589,10 +589,10 @@ __global__ void kernelCountFilteredPerform
  */
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
-    intCUDA             * const dpPolymerSystem,
-    T_Flags             * const dpPolymerFlags ,
-    uint8_t             * const dpLatticeTmp   ,
-    uint32_t              const nMonomers
+    intCUDA             * const __restrict__ dpPolymerSystem,
+    T_Flags             * const __restrict__ dpPolymerFlags ,
+    uint8_t             * const __restrict__ dpLatticeTmp   ,
+    uint32_t              const              nMonomers
 )
 {
     int const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -600,9 +600,9 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         return;
 
     auto data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
-    intCUDA & x0         = data.x;
-    intCUDA & y0         = data.y;
-    intCUDA & z0         = data.z;
+    intCUDA & x0 = data.x;
+    intCUDA & y0 = data.y;
+    intCUDA & z0 = data.z;
     auto const properties = dpPolymerFlags[ iMonomer ];
 
     if ( ( properties & 3 ) == 0 )    // impossible move
