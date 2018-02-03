@@ -160,82 +160,6 @@ __device__ inline uint32_t linearizeBoxVectorIndex
  * @return Returns true if any of that is occupied, i.e. if there
  *         would be a problem with the excluded volume condition.
  */
-__device__ inline bool checkFrontOriginal
-(
-    cudaTextureObject_t const texLattice,
-    intCUDA             const x0        ,
-    intCUDA             const y0        ,
-    intCUDA             const z0        ,
-    intCUDA             const dx        ,
-    intCUDA             const dy        ,
-    intCUDA             const dz        ,
-    intCUDA             const axis
-)
-{
-    bool isOccupied = false;
-
-    uint32_t const x0Abs  =   ( x0     ) & dcBoxXM1;
-    uint32_t const x0PDX  =   ( x0 + 1 ) & dcBoxXM1;
-    uint32_t const x0MDX  =   ( x0 - 1 ) & dcBoxXM1;
-    uint32_t const y0Abs  = ( ( y0     ) & dcBoxYM1 ) << dcBoxXLog2;
-    uint32_t const y0PDY  = ( ( y0 + 1 ) & dcBoxYM1 ) << dcBoxXLog2;
-    uint32_t const y0MDY  = ( ( y0 - 1 ) & dcBoxYM1 ) << dcBoxXLog2;
-    uint32_t const z0Abs  = ( ( z0     ) & dcBoxZM1 ) << dcBoxXYLog2;
-    uint32_t const z0PDZ  = ( ( z0 + 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
-    uint32_t const z0MDZ  = ( ( z0 - 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
-
-    switch ( axis >> 1 )
-    {
-        case 0: //-+x
-        {
-            uint32_t const x1 = ( x0 + 2*dx ) & dcBoxXM1;
-            isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0PDZ );
-            break;
-        }
-        case 1: //-+y
-        {
-            uint32_t const y1 = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2;
-            isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0PDZ );
-            break;
-        }
-        case 2: //-+z
-        {
-            uint32_t const z1 = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
-            isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0MDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0Abs + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0Abs + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0Abs + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0PDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0PDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0PDY + z1 );
-            break;
-        }
-    }
-    return isOccupied;
-}
-
-#if 0
 __device__ inline bool checkFront
 (
     cudaTextureObject_t const & texLattice,
@@ -332,10 +256,71 @@ __device__ inline bool checkFront
         }
         #undef TMP_FETCH
     }
+#else
+    uint32_t const x0Abs  =   ( x0     ) & dcBoxXM1;
+    uint32_t const x0PDX  =   ( x0 + 1 ) & dcBoxXM1;
+    uint32_t const x0MDX  =   ( x0 - 1 ) & dcBoxXM1;
+    uint32_t const y0Abs  = ( ( y0     ) & dcBoxYM1 ) << dcBoxXLog2;
+    uint32_t const y0PDY  = ( ( y0 + 1 ) & dcBoxYM1 ) << dcBoxXLog2;
+    uint32_t const y0MDY  = ( ( y0 - 1 ) & dcBoxYM1 ) << dcBoxXLog2;
+    uint32_t const z0Abs  = ( ( z0     ) & dcBoxZM1 ) << dcBoxXYLog2;
+    uint32_t const z0PDZ  = ( ( z0 + 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
+    uint32_t const z0MDZ  = ( ( z0 - 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
+
+    intCUDA const dx = DXTable_d[ axis ];   // 2*axis-1
+    intCUDA const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
+    intCUDA const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
+    switch ( axis >> 1 )
+    {
+        case 0: //-+x
+        {
+            uint32_t const x1 = ( x0 + 2*dx ) & dcBoxXM1;
+            isOccupied =
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0PDZ );
+            break;
+        }
+        case 1: //-+y
+        {
+            uint32_t const y1 = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2;
+            isOccupied =
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0PDZ );
+            break;
+        }
+        case 2: //-+z
+        {
+            uint32_t const z1 = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
+            isOccupied =
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0MDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0Abs + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0Abs + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0Abs + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0PDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0PDY + z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0PDY + z1 );
+            break;
+        }
+    }
 #endif
     return isOccupied;
 }
-#endif
 
 __device__ __host__ inline uintCUDA linearizeBondVectorIndex
 (
@@ -437,7 +422,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
             return;
     }
 
-    if ( checkFrontOriginal( texLatticeRefOut, x0, y0, z0, dx, dy, dz, direction ) )
+    if ( checkFront( texLatticeRefOut, x0, y0, z0, direction ) )
         return;
 
     /* everything fits so perform move on temporary lattice */
@@ -505,7 +490,7 @@ __global__ void kernelCountFilteredCheck
         }
     }
 
-    if ( checkFrontOriginal( texLatticeRefOut, x0, y0, z0, dx, dy, dz, direction ) )
+    if ( checkFront( texLatticeRefOut, x0, y0, z0, direction ) )
     {
         atomicAdd( dpFiltered+2, 1 );
         if ( ! invalidBond ) /* this is the more real relative use-case where invalid bonds are already filtered out */
@@ -545,7 +530,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
     intCUDA const dy = DYTable_d[ direction ];
     intCUDA const dz = DZTable_d[ direction ];
 
-    if ( checkFrontOriginal( texLatticeTmp, x0, y0, z0, dx, dy, dz, direction ) )
+    if ( checkFront( texLatticeTmp, x0, y0, z0, direction ) )
         return;
 
     /* If possible, perform move now on normal lattice */
@@ -578,12 +563,7 @@ __global__ void kernelCountFilteredPerform
         return;
 
     uintCUDA const direction = ( properties >> 2 ) & 7; // 7=0b111
-
-    intCUDA const dx = DXTable_d[ direction ];
-    intCUDA const dy = DYTable_d[ direction ];
-    intCUDA const dz = DZTable_d[ direction ];
-
-    if ( checkFrontOriginal( texLatticeTmp, data.x, data.y, data.z, dx, dy, dz, direction ) )
+    if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
         atomicAdd( dpFiltered+4, size_t(1) );
 }
 
