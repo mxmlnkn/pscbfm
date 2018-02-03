@@ -183,14 +183,12 @@ __device__ inline bool checkFrontOriginal
     uint32_t const z0Abs  = ( ( z0     ) & dcBoxZM1 ) << dcBoxXYLog2;
     uint32_t const z0PDZ  = ( ( z0 + 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
     uint32_t const z0MDZ  = ( ( z0 - 1 ) & dcBoxZM1 ) << dcBoxXYLog2;
-    uint32_t const x1 = ( x0 + 2*dx ) & dcBoxXM1;
-    uint32_t const y1 = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2;
-    uint32_t const z1 = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
 
     switch ( axis >> 1 )
     {
         case 0: //-+x
         {
+            uint32_t const x1 = ( x0 + 2*dx ) & dcBoxXM1;
             isOccupied =
                 tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
                 tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
@@ -205,6 +203,7 @@ __device__ inline bool checkFrontOriginal
         }
         case 1: //-+y
         {
+            uint32_t const y1 = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2;
             isOccupied =
                 tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
                 tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
@@ -219,6 +218,7 @@ __device__ inline bool checkFrontOriginal
         }
         case 2: //-+z
         {
+            uint32_t const z1 = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
             isOccupied =
                 tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
                 tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
