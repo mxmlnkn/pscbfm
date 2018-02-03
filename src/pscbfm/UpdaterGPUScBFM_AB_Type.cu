@@ -394,6 +394,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     intCUDA const & x0         = data.x;
     intCUDA const & y0         = data.y;
     intCUDA const & z0         = data.z;
+    auto const properties = dpPolymerFlags[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     uintCUDA const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
 
@@ -430,7 +431,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
      * texture used above. Won't this result in read-after-write race-conditions?
      * Then again the written / changed bits are never used in the above code ... */
-    dpPolymerFlags[ iMonomer + iOffset ] = ( direction << 2 ) + 1 /* can-move-flag */;
+    dpPolymerFlags[ iMonomer + iOffset ] = properties | ( ( direction << 2 ) + 1 /* can-move-flag */ );
     dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
 }
 
