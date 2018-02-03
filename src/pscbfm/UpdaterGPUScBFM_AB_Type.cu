@@ -372,13 +372,13 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
  *       Why are there three kernels instead of just one
  *        -> for global synchronization
  */
-using MonomerEdges = UpdaterGPUScBFM_AB_Type::MonomerEdges;
+using MonomerEdgesCompressed = UpdaterGPUScBFM_AB_Type::MonomerEdgesCompressed;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
     intCUDA           * const dpPolymerSystem  ,
     uint32_t            const iOffset          ,
     uint8_t           * const dpLatticeTmp     ,
-    MonomerEdges      * const dpMonoInfo       ,
+    MonomerEdgesCompressed * const dpMonoInfo  ,
     uint32_t            const nMonomers        ,
     uint32_t            const rSeed            ,
     cudaTextureObject_t const texLatticeRefOut
@@ -439,7 +439,7 @@ __global__ void kernelCountFilteredCheck
     intCUDA           * const dpPolymerSystem  ,
     uint32_t            const iOffset          ,
     uint8_t           * const /* dpLatticeTmp */,
-    MonomerEdges      * const dpMonoInfo       ,
+    MonomerEdgesCompressed * const dpMonoInfo  ,
     uint32_t            const nMonomers        ,
     uint32_t            const rSeed            ,
     cudaTextureObject_t const texLatticeRefOut ,
@@ -856,12 +856,11 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
      * Bonds are not supposed to change, therefore we don't need to push and
      * pop them each time we do something on the GPU! */
     assert( mNeighborsSorted == NULL );
-    mNeighborsSorted = new MirroredVector< MonomerEdges >( nMonomersPadded, mStream );
+    mNeighborsSorted = new MirroredVector< MonomerEdgesCompressed >( nMonomersPadded, mStream );
     std::memset( mNeighborsSorted->host, 0, mNeighborsSorted->nBytes );
     mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::runSimulationOnGPU] map neighborIds to sorted array ... ";
     for ( size_t i = 0u; i < nAllMonomers; ++i )
     {
-        mNeighborsSorted->host[ iToiNew[i] ].size = mNeighbors[i].size;
         for ( size_t j = 0u; j < mNeighbors[i].size; ++j )
             mNeighborsSorted->host[ iToiNew[i] ].neighborIds[j] = iToiNew[ mNeighbors[i].neighborIds[j] ];
     }
@@ -875,9 +874,9 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
          * initialized to 0 to reduce problems. This is done by the memset. */
         for ( size_t i = 0u; i < mNeighborsSorted->nElements; ++i )
         {
-            if ( mNeighborsSorted->host[i].size > MAX_CONNECTIVITY )
+            if ( mNeighbors[i].size > MAX_CONNECTIVITY )
                 throw std::runtime_error( "A monomer has more neighbors than allowed!" );
-            for ( size_t j = 0u; j < mNeighborsSorted->host[i].size; ++j )
+            for ( size_t j = 0u; j < mNeighbors[i].size; ++j )
             {
                 auto const iSorted = mNeighborsSorted->host[i].neighborIds[j];
                 if ( iSorted == UINT32_MAX )

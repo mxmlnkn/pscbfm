@@ -118,9 +118,14 @@ public:
         uint32_t size;
         uint32_t neighborIds[ MAX_CONNECTIVITY ];
     };
+    /* size is encoded in mPolymerSystem to make things faster */
+    struct MonomerEdgesCompressed
+    {
+        uint32_t neighborIds[ MAX_CONNECTIVITY ];
+    };
 private:
     std::vector< MonomerEdges > mNeighbors;
-    MirroredVector< MonomerEdges > * mNeighborsSorted; /* stores the IDs of all neighbors as is needed to check for bond length restrictions. But after the sorting of mPolymerSystem the IDs also changed. And as I don't want to push iToiNew and iNewToi to the GPU instead I just change the IDs for all neighbors. Plus the array itself gets rearranged to the new AAA...BBB...CC... ordering */
+    MirroredVector< MonomerEdgesCompressed > * mNeighborsSorted; /* stores the IDs of all neighbors as is needed to check for bond length restrictions. But after the sorting of mPolymerSystem the IDs also changed. And as I don't want to push iToiNew and iNewToi to the GPU instead I just change the IDs for all neighbors. Plus the array itself gets rearranged to the new AAA...BBB...CC... ordering */
 
     uint32_t   mBoxX     ;
     uint32_t   mBoxY     ;
