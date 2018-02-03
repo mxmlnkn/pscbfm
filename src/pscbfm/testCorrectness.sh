@@ -168,16 +168,19 @@ checkSc()
     $csrun $check "./$name" -i ../tests/inputPscBFM.bfm -e ../tests/resultNormPscBFM.seeds \
         -o result.bfm -g $iGpu -m 1000 -s 1000 2>&1 | tee "$logName-check.log"
     # cp result{,-norm}.bfm
-    if [ -f result.bfm ]; then
-        colordiff --report-identical-files \
-            <( cat '../tests/resultNormPscBFM.bfm' | ignoreBFMLines | hexdump -C ) \
-            <( cat 'result.bfm'                    | ignoreBFMLines | hexdump -C ) | head -20
-    fi | tee -a "$logName-check.log"
 
     diff -q <( cat '../tests/resultNormPscBFM.bfm' | ignoreBFMLines ) \
             <( cat 'result.bfm'                    | ignoreBFMLines )
     local identical=$?
     if [ ! "$identical" -eq 0 ]; then
+        if [ -f result.bfm ]; then
+            colordiff --report-identical-files \
+                <( cat '../tests/resultNormPscBFM.bfm' | ignoreBFMLines | hexdump -C ) \
+                <( cat 'result.bfm'                    | ignoreBFMLines | hexdump -C ) | head -20
+        else
+            echo "File 'result.bfm' does not exist. It seems the simulation did not even finish and quit because of some problem."
+        fi 2>&1 | tee -a "$logName-check.log"
+
         echo -e "\e[31mFiles are not identical, something is wrong, not bothering with benchmarks\e[0m" 1>&2
         return 1
     fi
