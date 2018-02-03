@@ -520,14 +520,14 @@ __global__ void kernelSimulationScBFMPerformSpecies
     if ( iMonomer >= nMonomers )
         return;
 
-    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
-    auto const & x0 = data.x;
-    auto const & y0 = data.y;
-    auto const & z0 = data.z;
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         return;
 
+    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto const & x0 = data.x;
+    auto const & y0 = data.y;
+    auto const & z0 = data.z;
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
 
     auto const dx = DXTable_d[ direction ];
@@ -562,11 +562,11 @@ __global__ void kernelCountFilteredPerform
     if ( iMonomer >= nMonomers )
         return;
 
-    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         return;
 
+    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
         atomicAdd( dpFiltered+4, size_t(1) );
@@ -599,14 +599,14 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     if ( iMonomer >= nMonomers )
         return;
 
+    auto const properties = dpPolymerFlags[ iMonomer ];
+    if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
+        return;
+
     auto data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto & x0 = data.x;
     auto & y0 = data.y;
     auto & z0 = data.z;
-    auto const properties = dpPolymerFlags[ iMonomer ];
-
-    if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
-        return;
 
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     auto const dx = DXTable_d[ direction ];
