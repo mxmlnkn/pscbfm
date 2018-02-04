@@ -526,12 +526,12 @@ __global__ void kernelSimulationScBFMPerformSpecies
   {
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
-        return;
+        continue;
 
-    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ blockIdx.x * blockDim.x + threadIdx.x ];
+    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
-        return;
+        continue;
 
     /* If possible, perform move now on normal lattice */
     dpPolymerFlags[ iMonomer ] = properties | T_Flags(2); // indicating allowed move
@@ -561,7 +561,7 @@ __global__ void kernelCountFilteredPerform
   {
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
-        return;
+        continue;
 
     auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
@@ -595,12 +595,9 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-
-
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
-        return;
+        continue;
 
     auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
@@ -1027,10 +1024,10 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     {
         auto const nConcThreads = mCudaProps.maxThreadsPerMultiProcessor
                                 * mCudaProps.multiProcessorCount;
-        mnBlocksForGroup[i] = ceilDiv( mnElementsInGroup[i], mnThreads ); /*std::min< size_t >(
+        mnBlocksForGroup[i] = std::min< size_t >(
             ceilDiv( nConcThreads, mnThreads ),
             ceilDiv( mnElementsInGroup[i], mnThreads )
-        );*/
+        );
 
         mLog( "Info" )
         << "Will start kernels for species " << char( 'A' + i )
