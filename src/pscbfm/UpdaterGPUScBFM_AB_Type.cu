@@ -399,7 +399,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     if ( iGrid % 12 == 0 ) // 12 = floor( log(2^32) / log(6) )
-        rn = hash( hash( iMonomer ) ^ rSeed ) % 6;
+        rn = hash( hash( iMonomer ) ^ rSeed );
 
     T_Flags const direction = rn % 6; rn /= 6;
     T_Flags properties = 0;
