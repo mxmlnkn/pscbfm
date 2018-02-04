@@ -383,6 +383,7 @@ std::string printSharedMemoryConfig( void )
  *             the user will need to free (C-style) this data on program exit!
  * @param[out] rnDevices - will hold number of cuda devices
  *
+ * @see https://www.cs.cmu.edu/afs/cs/academic/class/15668-s11/www/cuda-doc/html/structcudaDeviceProp.html
  * Most of these can also be queried using cuDeviceGetAttribute from the
  * cuda_runtime_api.h header
  * @see http://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__DEVICE.html

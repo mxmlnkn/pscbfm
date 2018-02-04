@@ -14,7 +14,7 @@
 #include <cstdint>                          // uint32_t, size_t
 #include <stdexcept>
 
-#include <cuda_runtime_api.h>               // cudaStream_t
+#include <cuda_runtime_api.h>               // cudaStream_t, cudaDeviceProp
 #include <LeMonADE/utility/RandomNumberGenerators.h>
 
 #include "cudacommon.hpp"
@@ -289,6 +289,11 @@ private:
     uint32_t   mBoxZM1   ;
     uint32_t   mBoxXLog2 ;
     uint32_t   mBoxXYLog2;
+
+    int            miGpuToUse;
+    cudaDeviceProp mCudaProps;
+    static long int const   mnThreads = 256;
+    std::vector< long int > mnBlocksForGroup;
 
     uint32_t linearizeBoxVectorIndex
     (

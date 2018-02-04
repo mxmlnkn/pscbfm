@@ -392,10 +392,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     cudaTextureObject_t const              texLatticeRefOut
 )
 {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( iMonomer >= nMonomers )
-        return;
-
+  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+  if ( iMonomer < nMonomers )
+  {
     auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     T_Flags const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
@@ -441,6 +440,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     }
 #endif
     dpPolymerFlags[ iOffset + iMonomer ] = properties;
+  }
 }
 
 
@@ -459,9 +459,9 @@ __global__ void kernelCountFilteredCheck
     unsigned long long int * const __restrict__ dpFiltered
 )
 {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( iMonomer >= nMonomers )
-        return;
+  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+  if ( iMonomer < nMonomers )
+  {
 
     auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     auto const & x0         = data.x;
@@ -507,6 +507,7 @@ __global__ void kernelCountFilteredCheck
         if ( ! invalidBond ) /* this is the more real relative use-case where invalid bonds are already filtered out */
             atomicAdd( dpFiltered+3, 1 );
     }
+  }
 }
 
 
@@ -524,9 +525,9 @@ __global__ void kernelSimulationScBFMPerformSpecies
     cudaTextureObject_t   const              texLatticeTmp
 )
 {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( iMonomer >= nMonomers )
-        return;
+  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+  if ( iMonomer < nMonomers )
+  {
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
@@ -548,6 +549,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
      * But we can't use the applied positions, because we also need to clean
      * those particles which couldn't move in this second kernel but where
      * still set in the lattice by the first kernel! */
+  }
 }
 
 __global__ void kernelCountFilteredPerform
@@ -560,9 +562,9 @@ __global__ void kernelCountFilteredPerform
     unsigned long long int * const __restrict__ dpFiltered
 )
 {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( iMonomer >= nMonomers )
-        return;
+  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+  if ( iMonomer < nMonomers )
+  {
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
@@ -572,6 +574,7 @@ __global__ void kernelCountFilteredPerform
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
         atomicAdd( dpFiltered+4, size_t(1) );
+  }
 }
 
 /**
@@ -597,9 +600,9 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     uint32_t              const              nMonomers
 )
 {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-    if ( iMonomer >= nMonomers )
-        return;
+  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+  if ( iMonomer < nMonomers )
+  {
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
@@ -614,7 +617,9 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
     if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
         ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
+  }
 }
+
 
 
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
@@ -686,7 +691,8 @@ void UpdaterGPUScBFM_AB_Type::setGpu( int iGpuToUse )
         mLog( "Error" ) << msg.str();
         throw std::invalid_argument( msg.str() );
     }
-    CUDA_ERROR( cudaSetDevice( iGpuToUse ));
+    CUDA_ERROR( cudaSetDevice( iGpuToUse ) );
+    miGpuToUse = iGpuToUse;
 }
 
 
@@ -1019,6 +1025,25 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         << "particles in a (" << mBoxX << "," << mBoxY << "," << mBoxZ << ") box "
         << "=> " << 100. * nAllMonomers / ( mBoxX * mBoxY * mBoxZ ) << "%\n"
         << "Note: densest packing is: 25% -> in this case it might be more reasonable to actually iterate over the spaces where particles can move to, keeping track of them instead of iterating over the particles\n";
+
+    /* calculate kernel configurations */
+    CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
+    CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
+    mnBlocksForGroup.resize( mnElementsInGroup.size(), 0 );
+    for ( size_t i = 0u; i < mnBlocksForGroup.size(); ++i )
+    {
+        auto const nConcThreads = mCudaProps.maxThreadsPerMultiProcessor
+                                * mCudaProps.multiProcessorCount;
+        mnBlocksForGroup[i] = ceilDiv( mnElementsInGroup[i], mnThreads ); /*std::min< size_t >(
+            ceilDiv( nConcThreads, mnThreads ),
+            ceilDiv( mnElementsInGroup[i], mnThreads )
+        );*/
+
+        mLog( "Info" )
+        << "Will start kernels for species " << char( 'A' + i )
+        << " with " << mnBlocksForGroup[i] << " blocks with each "
+        << mnThreads << " threads\n";
+    }
 }
 
 
@@ -1335,11 +1360,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 {
     std::clock_t const t0 = std::clock();
 
-    long int const nThreads = 256;
-    std::vector< long int > nBlocksForGroup( mnElementsInGroup.size() );
-    for ( size_t i = 0u; i < nBlocksForGroup.size(); ++i )
-        nBlocksForGroup[i] = ceilDiv( mnElementsInGroup[i], nThreads );
-
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
      *   0: bonds, 1: volume exclusion, 2: volume exclusion (parallel)
@@ -1382,7 +1402,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             /* randomly choose which monomer group to advance */
             auto const iSpecies = randomNumbers.r250_rand32() % mnElementsInGroup.size();
             auto const seed     = randomNumbers.r250_rand32();
-            auto const nBlocks  = nBlocksForGroup.at( iSpecies );
+            auto const nBlocks  = mnBlocksForGroup.at( iSpecies );
 
             /*
             if ( iStep < 3 )
@@ -1390,7 +1410,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             */
 
             kernelSimulationScBFMCheckSpecies
-            <<< nBlocks, nThreads, 0, mStream >>>(
+            <<< nBlocks, mnThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu,
                 mPolymerFlags->gpu,
                 iSubGroupOffset[ iSpecies ],
@@ -1405,7 +1425,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             if ( mLog.isActive( "Stats" ) )
             {
                 kernelCountFilteredCheck
-                <<< nBlocks, nThreads, 0, mStream >>>(
+                <<< nBlocks, mnThreads, 0, mStream >>>(
                     mPolymerSystemSorted->gpu,
                     mPolymerFlags->gpu,
                     iSubGroupOffset[ iSpecies ],
@@ -1420,7 +1440,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             }
 
             kernelSimulationScBFMPerformSpecies
-            <<< nBlocks, nThreads, 0, mStream >>>(
+            <<< nBlocks, mnThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeOut->gpu,
@@ -1431,7 +1451,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             if ( mLog.isActive( "Stats" ) )
             {
                 kernelCountFilteredPerform
-                <<< nBlocks, nThreads, 0, mStream >>>(
+                <<< nBlocks, mnThreads, 0, mStream >>>(
                     mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeOut->gpu,
@@ -1442,7 +1462,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             }
 
             kernelSimulationScBFMZeroArraySpecies
-            <<< nBlocks, nThreads, 0, mStream >>>(
+            <<< nBlocks, mnThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu,
