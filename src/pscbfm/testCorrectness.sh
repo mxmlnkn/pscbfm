@@ -142,6 +142,8 @@ checkSc()
         # about return 1: note that because of the piping to tee this does not affect the checkSc function as all this is called in a subshell -> need to check PIPESTATUS
         mkdir -p "$folder/gpu-source/"
         'mv' "./gpu-sources/${name#benchmark-}" "$folder/gpu-source/"
+        # make new empty folder, because else next build might fail
+        mkdir "./gpu-sources/${name#benchmark-}"
     } 2>&1 | tee "$logName-build.log"
     if [ ! "${PIPESTATUS[0]}" -eq 0 ]; then return 1; fi
 
