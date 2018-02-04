@@ -49,10 +49,20 @@ __device__ __constant__ uint32_t dcBoxZM1   ;  // mLattice size in Z-1
 __device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
 __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
 
-template< typename T > struct intCUDAVec;
-template<> struct intCUDAVec< int16_t >{ typedef short3 value_type; };
-template<> struct intCUDAVec< int32_t >{ typedef int3   value_type; };
-
+template< typename T, size_t N > struct intCUDAVec;
+#define TMP_SPECIALIZE_INTCUDA_VEC( TYPE, N, CUDATYPE )             \
+template<> struct intCUDAVec< TYPE, N >                             \
+{                                                                   \
+    using value_type = CUDATYPE ## N;                               \
+    /*static_assert( sizeof( value_type ) == sizeof( TYPE ) * N ); */  \
+};
+TMP_SPECIALIZE_INTCUDA_VEC( int16_t, 3, short )
+TMP_SPECIALIZE_INTCUDA_VEC( int32_t, 3, int   )
+TMP_SPECIALIZE_INTCUDA_VEC( int64_t, 3, long  )
+TMP_SPECIALIZE_INTCUDA_VEC( int16_t, 4, short )
+TMP_SPECIALIZE_INTCUDA_VEC( int32_t, 4, int   )
+TMP_SPECIALIZE_INTCUDA_VEC( int64_t, 4, long  )
+#undef TMP_SPECIALIZE_INTCUDA_VEC
 
 
 /* Since CUDA 5.5 (~2014) there do exist texture objects which are much
@@ -396,7 +406,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     if ( iMonomer >= nMonomers )
         return;
 
-    auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+    auto const r0 = ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     T_Flags const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
     T_Flags properties = 0;
@@ -406,6 +416,8 @@ __global__ void kernelSimulationScBFMCheckSpecies
     auto const dy = DYTable_d[ direction ];
     auto const dz = DZTable_d[ direction ];
 
+    __shared__ bool smForbiddenBonds[512];
+
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
     * if the box is not periodic, if not, then don't move the particle */
@@ -414,15 +426,29 @@ __global__ void kernelSimulationScBFMCheckSpecies
          0 <= r0.z + dz && r0.z + dz < dcBoxZM1    )
     {
 #endif
+        /**
+         * Cache dpForbiddenBonds into smForbiddenBonds. Cache line is 128 Bytes
+         * bool is 1 byte => we need at least 4 threads loading full cache lines
+         * https://devblogs.nvidia.com/cuda-pro-tip-increase-performance-with-vectorized-memory-access/
+         */
+        int constexpr nTransfers = 512 / sizeof( longlong4 );
+        assert( blockDim.x >= nTransfers );
+        if ( threadIdx.x < nTransfers )
+        {
+            ( (longlong4 *) &smForbiddenBonds )[ threadIdx.x ] =
+            ( (longlong4 *) dpForbiddenBonds  )[ threadIdx.x ];
+        }
+
         /* check whether the new position would result in invalid bonds
          * between this monomer and its neighbors */
         auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
         bool forbiddenBond = false;
+        __syncthreads();    // sync before we can access smForbiddenBonds, inside the loop is rather bad
         for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
         {
             auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-            auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
-            if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r0.x - dx, data2.y - r0.y - dy, data2.z - r0.z - dz ) ] )
+            auto const data2 = ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
+            if ( smForbiddenBonds[ linearizeBondVectorIndex( data2.x - r0.x - dx, data2.y - r0.y - dy, data2.z - r0.z - dz ) ] )
             {
                 forbiddenBond = true;
                 break;
@@ -463,7 +489,7 @@ __global__ void kernelCountFilteredCheck
     if ( iMonomer >= nMonomers )
         return;
 
-    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+    auto const data = ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     auto const & x0         = data.x;
     auto const & y0         = data.y;
     auto const & z0         = data.z;
@@ -492,7 +518,7 @@ __global__ void kernelCountFilteredCheck
     for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
     {
         auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-        auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
+        auto const data2 = ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
         if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - x0 - dx, data2.y - y0 - dy, data2.z - z0 - dz ) ] )
         {
             atomicAdd( dpFiltered+1, 1 );
@@ -532,7 +558,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         return;
 
-    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto r0 = ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
         return;
@@ -568,7 +594,7 @@ __global__ void kernelCountFilteredPerform
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         return;
 
-    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto const data = ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
         atomicAdd( dpFiltered+4, size_t(1) );
@@ -605,7 +631,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
         return;
 
-    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto r0 = ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
 
     r0.x += DXTable_d[ direction ];
@@ -613,7 +639,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     r0.z += DZTable_d[ direction ];
     dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
     if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
-        ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
+        ( (intCUDAVec< intCUDA, 3 >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
 }
 
 
