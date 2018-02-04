@@ -524,12 +524,11 @@ __global__ void kernelSimulationScBFMPerformSpecies
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         return;
 
-    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ blockIdx.x * blockDim.x + threadIdx.x ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
         return;
