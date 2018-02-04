@@ -50,8 +50,8 @@ __device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
 __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
 
 template< typename T > struct intCUDAVec;
-template<> struct intCUDAVec< int16_t >{ typedef short4 value_type; };
-template<> struct intCUDAVec< int32_t >{ typedef int4   value_type; };
+template<> struct intCUDAVec< int16_t >{ typedef short3 value_type; };
+template<> struct intCUDAVec< int32_t >{ typedef int3   value_type; };
 
 
 
@@ -380,15 +380,16 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
 using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    intCUDA     const * const  __restrict__ dpPolymerSystem        ,
-    T_Flags           * const  __restrict__ dpPolymerFlags         ,
-    uint32_t            const               iOffset                ,
-    uint8_t           * const  __restrict__ dpLatticeTmp           ,
-    uint32_t    const * const  __restrict__ dpNeighbors            ,
-    uint32_t            const               rNeighborsPitchElements,
-    uint32_t            const               nMonomers              ,
-    uint32_t            const               rSeed                  ,
-    cudaTextureObject_t const               texLatticeRefOut
+    intCUDA     const * const __restrict__ dpPolymerSystem        ,
+    T_Flags           * const __restrict__ dpPolymerFlags         ,
+    uint32_t            const              iOffset                ,
+    uint8_t           * const __restrict__ dpLatticeTmp           ,
+    uint32_t    const * const __restrict__ dpNeighbors            ,
+    uint32_t            const              rNeighborsPitchElements,
+    uint8_t     const * const __restrict__ dpNeighborsSizes       ,
+    uint32_t            const              nMonomers              ,
+    uint32_t            const              rSeed                  ,
+    cudaTextureObject_t const              texLatticeRefOut
 )
 {
     auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -415,9 +416,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
 #endif
         /* check whether the new position would result in invalid bonds
          * between this monomer and its neighbors */
-        auto const nNeighbors = ( r0.w >> intCUDA(5) ) & intCUDA(7); // 7=0b111
+        auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
         bool forbiddenBond = false;
-        for ( intCUDA iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
+        for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
         {
             auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
             auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
@@ -451,6 +452,7 @@ __global__ void kernelCountFilteredCheck
     uint8_t          const * const __restrict__ /* dpLatticeTmp */     ,
     uint32_t         const * const __restrict__ dpNeighbors            ,
     uint32_t                 const              rNeighborsPitchElements,
+    uint8_t          const * const __restrict__ dpNeighborsSizes       ,
     uint32_t                 const              nMonomers              ,
     uint32_t                 const              rSeed                  ,
     cudaTextureObject_t      const              texLatticeRefOut       ,
@@ -461,7 +463,7 @@ __global__ void kernelCountFilteredCheck
     if ( iMonomer >= nMonomers )
         return;
 
-    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     auto const & x0         = data.x;
     auto const & y0         = data.y;
     auto const & z0         = data.z;
@@ -485,9 +487,9 @@ __global__ void kernelCountFilteredCheck
 #endif
     /* check whether the new position would result in invalid bonds
      * between this monomer and its neighbors */
-    auto const nNeighbors = ( data.w >> intCUDA(5) ) & intCUDA(7); // 7=0b111
+    auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
     bool invalidBond = false;
-    for ( intCUDA iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
+    for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
     {
         auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
         auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
@@ -624,6 +626,7 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mPolymerSystemSorted ( NULL ),
    mPolymerFlags        ( NULL ),
    mNeighborsSorted     ( NULL ),
+   mNeighborsSortedSizes( NULL ),
    mNeighborsSortedInfo ( nBytesAlignment ),
    mAttributeSystem     ( NULL ),
    mBoxX                ( 0 ),
@@ -661,6 +664,7 @@ void UpdaterGPUScBFM_AB_Type::destruct()
     if ( mPolymerSystemSorted != NULL ){ delete mPolymerSystemSorted; mPolymerSystemSorted = NULL; }  // initialize
     if ( mPolymerFlags    != NULL ){ delete   mPolymerFlags   ; mPolymerFlags    = NULL; }  // initialize
     if ( mNeighborsSorted != NULL ){ delete   mNeighborsSorted; mNeighborsSorted = NULL; }  // initialize
+    if ( mNeighborsSortedSizes != NULL ){ delete   mNeighborsSortedSizes; mNeighborsSortedSizes = NULL; }  // initialize
     if ( mAttributeSystem != NULL ){ delete[] mAttributeSystem; mAttributeSystem = NULL; }  // setNrOfAllMonomers
 }
 
@@ -811,7 +815,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     CUDA_ERROR( cudaMemset( mPolymerFlags->gpu, 0, mPolymerFlags->nBytes ) );
     /* Calculate offsets / prefix sum including the alignment */
     assert( mPolymerSystemSorted == NULL );
-    mPolymerSystemSorted = new MirroredVector< intCUDA >( 4u * nMonomersPadded, mStream );
+    mPolymerSystemSorted = new MirroredVector< intCUDA >( 3u * nMonomersPadded, mStream );
     #ifndef NDEBUG
         std::memset( mPolymerSystemSorted.host, 0, mPolymerSystemSorted.nBytes );
     #endif
@@ -863,6 +867,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         mNeighborsSortedInfo.newMatrix( MAX_CONNECTIVITY, mnElementsInGroup[i] );
     mNeighborsSorted = new MirroredVector< uint32_t >( mNeighborsSortedInfo.getRequiredElements(), mStream );
     std::memset( mNeighborsSorted->host, 0, mNeighborsSorted->nBytes );
+    mNeighborsSortedSizes = new MirroredVector< uint8_t >( nMonomersPadded, mStream );
+    std::memset( mNeighborsSortedSizes->host, 0, mNeighborsSortedSizes->nBytes );
 
     if ( mLog.isActive( "Info" ) )
     {
@@ -907,6 +913,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
             if ( iNewToi[i] >= nAllMonomers )
                 continue;
             /* actually to the sorting / copying and conversion */
+            mNeighborsSortedSizes->host[i] = mNeighbors[ iNewToi[i] ].size;
             auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
             for ( size_t j = 0u; j < mNeighbors[  iNewToi[i] ].size; ++j )
             {
@@ -920,6 +927,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         }
     }
     mNeighborsSorted->pushAsync();
+    mNeighborsSortedSizes->pushAsync();
     mLog( "Info" ) << "Done\n";
 
     /* some checks for correctness of new adjusted neighbor global IDs */
@@ -968,11 +976,10 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     {
         if ( i < 20 )
             mLog( "Info" ) << "Write " << i << " to " << this->iToiNew[i] << "\n";
-        auto const pTarget = mPolymerSystemSorted->host + 4*iToiNew[i];
+        auto const pTarget = mPolymerSystemSorted->host + 3*iToiNew[i];
         pTarget[0] = mPolymerSystem[4*i+0];
         pTarget[1] = mPolymerSystem[4*i+1];
         pTarget[2] = mPolymerSystem[4*i+2];
-        pTarget[3] = mPolymerSystem[4*i+3];
     }
     mPolymerSystemSorted->pushAsync();
 
@@ -1390,6 +1397,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mLatticeTmp->gpu,
                 mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
                 mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
+                mNeighborsSortedSizes->gpu,
                 mnElementsInGroup[ iSpecies ], seed,
                 mLatticeOut->texture
             );
@@ -1404,6 +1412,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     mLatticeTmp->gpu,
                     mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
                     mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
+                    mNeighborsSortedSizes->gpu,
                     mnElementsInGroup[ iSpecies ], seed,
                     mLatticeOut->texture,
                     dpFiltered
@@ -1412,7 +1421,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMPerformSpecies
             <<< nBlocks, nThreads, 0, mStream >>>(
-                mPolymerSystemSorted->gpu + 4*iSubGroupOffset[ iSpecies ],
+                mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeOut->gpu,
                 mnElementsInGroup[ iSpecies ],
@@ -1423,7 +1432,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelCountFilteredPerform
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + 4*iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
@@ -1434,7 +1443,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMZeroArraySpecies
             <<< nBlocks, nThreads, 0, mStream >>>(
-                mPolymerSystemSorted->gpu + 4*iSubGroupOffset[ iSpecies ],
+                mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu,
                 mnElementsInGroup[ iSpecies ]
@@ -1546,13 +1555,12 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     /* untangle reordered array so that LeMonADE can use it again */
     for ( size_t i = 0u; i < nAllMonomers; ++i )
     {
-        auto const pTarget = mPolymerSystemSorted->host + 4*iToiNew[i];
+        auto const pTarget = mPolymerSystemSorted->host + 3*iToiNew[i];
         if ( i < 10 )
             mLog( "Info" ) << "Copying back " << i << " from " << iToiNew[i] << "\n";
         mPolymerSystem[ 4*i+0 ] = pTarget[0];
         mPolymerSystem[ 4*i+1 ] = pTarget[1];
         mPolymerSystem[ 4*i+2 ] = pTarget[2];
-        mPolymerSystem[ 4*i+3 ] = pTarget[3];
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
