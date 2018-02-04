@@ -551,6 +551,10 @@ __global__ void kernelSimulationScBFMPerformSpecies
      * But we can't use the applied positions, because we also need to clean
      * those particles which couldn't move in this second kernel but where
      * still set in the lattice by the first kernel! */
+    x0 += dx;
+    y0 += dy;
+    z0 += dz;
+    ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = data;
 }
 
 __global__ void kernelCountFilteredPerform
@@ -618,12 +622,10 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     auto const dy = DYTable_d[ direction ];
     auto const dz = DZTable_d[ direction ];
 
-    x0 += dx;
-    y0 += dy;
-    z0 += dz;
-    dpLatticeTmp[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
     if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
-        ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = data;
+        dpLatticeTmp[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
+    else
+        dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
 }
 
 
