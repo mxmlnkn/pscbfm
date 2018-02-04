@@ -179,7 +179,6 @@ private:
      * I think I need AlignedMatrices for this, too :(
      */
     MirroredVector< intCUDA > * mPolymerSystemSorted;
-    AlignedMatrices< intCUDA > mPolymerSystemSortedInfo;
     /**
      * These are to be used for storing the flags and chosen direction of
      * the old property tag.
