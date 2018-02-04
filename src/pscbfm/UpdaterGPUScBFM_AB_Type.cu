@@ -527,9 +527,6 @@ __global__ void kernelSimulationScBFMPerformSpecies
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-
-
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         return;
