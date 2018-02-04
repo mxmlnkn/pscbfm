@@ -398,7 +398,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
   {
     auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
-    if ( iGrid % 12 == 0 ) // 12 = floor( log(2^32) / log(6) )
+    if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
         rn = hash( hash( iMonomer ) ^ rSeed );
 
     T_Flags const direction = rn % 6; rn /= 6;
@@ -1029,10 +1029,10 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     {
         auto const nConcThreads = mCudaProps.maxThreadsPerMultiProcessor
                                 * mCudaProps.multiProcessorCount;
-        mnBlocksForGroup[i] = std::min< size_t >(
+        mnBlocksForGroup[i] = ceilDiv( mnElementsInGroup[i], mnThreads ); /*std::min< size_t >(
             ceilDiv( nConcThreads, mnThreads ),
             ceilDiv( mnElementsInGroup[i], mnThreads )
-        );
+        );*/
 
         mLog( "Info" )
         << "Will start kernels for species " << char( 'A' + i )
