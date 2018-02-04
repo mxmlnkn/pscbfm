@@ -392,8 +392,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     cudaTextureObject_t const              texLatticeRefOut
 )
 {
-  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-  if ( iMonomer < nMonomers )
+  for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
     auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
@@ -459,9 +458,11 @@ __global__ void kernelCountFilteredCheck
     unsigned long long int * const __restrict__ dpFiltered
 )
 {
-  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-  if ( iMonomer < nMonomers )
+  for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
+    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( iMonomer >= nMonomers )
+        return;
 
     auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     auto const & x0         = data.x;
@@ -525,9 +526,11 @@ __global__ void kernelSimulationScBFMPerformSpecies
     cudaTextureObject_t   const              texLatticeTmp
 )
 {
-  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-  if ( iMonomer < nMonomers )
+  for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
+    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( iMonomer >= nMonomers )
+        return;
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
@@ -562,9 +565,11 @@ __global__ void kernelCountFilteredPerform
     unsigned long long int * const __restrict__ dpFiltered
 )
 {
-  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-  if ( iMonomer < nMonomers )
+  for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
+    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( iMonomer >= nMonomers )
+        return;
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
@@ -600,9 +605,11 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     uint32_t              const              nMonomers
 )
 {
-  auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-  if ( iMonomer < nMonomers )
+  for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
+    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+    if ( iMonomer >= nMonomers )
+        return;
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
@@ -619,7 +626,6 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
   }
 }
-
 
 
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
