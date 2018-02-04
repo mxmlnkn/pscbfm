@@ -394,9 +394,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     auto const & x0 = data.x;
     auto const & y0 = data.y;
     auto const & z0 = data.z;
-    auto const properties = dpPolymerFlags[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     T_Flags const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
+    T_Flags properties = 0;
 
      /* select random direction. Do this with bitmasking instead of lookup ??? */
     auto const dx = DXTable_d[ direction ];
@@ -406,33 +406,38 @@ __global__ void kernelSimulationScBFMCheckSpecies
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
     * if the box is not periodic, if not, then don't move the particle */
-    if ( ! ( 0 <= x0 + dx && x0 + dx < dcBoxXM1 &&
-             0 <= y0 + dy && y0 + dy < dcBoxYM1 &&
-             0 <= z0 + dz && z0 + dz < dcBoxZM1 ) )
+    if ( 0 <= x0 + dx && x0 + dx < dcBoxXM1 &&
+         0 <= y0 + dy && y0 + dy < dcBoxYM1 &&
+         0 <= z0 + dz && z0 + dz < dcBoxZM1    )
     {
-        return;
+#endif
+        /* check whether the new position would result in invalid bonds
+         * between this monomer and its neighbors */
+        auto const nNeighbors = ( data.w >> intCUDA(5) ) & intCUDA(7); // 7=0b111
+        bool forbiddenBond = false;
+        for ( intCUDA iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
+        {
+            auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
+            auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
+            if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - x0 - dx, data2.y - y0 - dy, data2.z - z0 - dz ) ] )
+            {
+                forbiddenBond = true;
+                break;
+            }
+        }
+        if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, x0, y0, z0, direction ) )
+        {
+            /* everything fits so perform move on temporary lattice */
+            /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
+             * texture used above. Won't this result in read-after-write race-conditions?
+             * Then again the written / changed bits are never used in the above code ... */
+            properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
+            dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
+        }
+#ifdef NONPERIODICITY
     }
 #endif
-    /* check whether the new position would result in invalid bonds
-     * between this monomer and its neighbors */
-    auto const nNeighbors = ( data.w >> intCUDA(5) ) & intCUDA(7); // 7=0b111
-    for ( intCUDA iNeighbor = 0; iNeighbor < nNeighbors; ++iNeighbor )
-    {
-        auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-        auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
-        if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - x0 - dx, data2.y - y0 - dy, data2.z - z0 - dz ) ] )
-            return;
-    }
-
-    if ( checkFront( texLatticeRefOut, x0, y0, z0, direction ) )
-        return;
-
-    /* everything fits so perform move on temporary lattice */
-    /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
-     * texture used above. Won't this result in read-after-write race-conditions?
-     * Then again the written / changed bits are never used in the above code ... */
-    dpPolymerFlags[ iMonomer + iOffset ] = properties | ( ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */ );
-    dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 1;
+    dpPolymerFlags[ iMonomer + iOffset ] = properties;
 }
 
 
@@ -509,7 +514,7 @@ __global__ void kernelCountFilteredCheck
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    intCUDA       const * const __restrict__ dpPolymerSystem  ,
+    intCUDA             * const __restrict__ dpPolymerSystem  ,
     T_Flags             * const __restrict__ dpPolymerFlags   ,
     uint8_t             * const __restrict__ dpLattice        ,
     uint32_t              const              nMonomers        ,
@@ -524,10 +529,10 @@ __global__ void kernelSimulationScBFMPerformSpecies
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         return;
 
-    auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
-    auto const & x0 = data.x;
-    auto const & y0 = data.y;
-    auto const & z0 = data.z;
+    auto data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto & x0 = data.x;
+    auto & y0 = data.y;
+    auto & z0 = data.z;
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
 
     auto const dx = DXTable_d[ direction ];
@@ -613,17 +618,12 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     auto const dy = DYTable_d[ direction ];
     auto const dz = DZTable_d[ direction ];
 
-    dpLatticeTmp[ linearizeBoxVectorIndex( x0+dx, y0+dy, z0+dz ) ] = 0;
-    /* possible move which clashes with another parallely moved monomer
-     * Clean up the temporary lattice with these moves. */
+    x0 += dx;
+    y0 += dy;
+    z0 += dz;
+    dpLatticeTmp[ linearizeBoxVectorIndex( x0, y0, z0 ) ] = 0;
     if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
-    {
-        x0 += dx;
-        y0 += dy;
-        z0 += dz;
-    }
-    ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = data;
-    dpPolymerFlags[ iMonomer ] = 0;
+        ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = data;
 }
 
 
