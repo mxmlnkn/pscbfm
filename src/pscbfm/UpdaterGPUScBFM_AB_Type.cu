@@ -394,6 +394,8 @@ __global__ void kernelSimulationScBFMCheckSpecies
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
+    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+
     auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     T_Flags const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
