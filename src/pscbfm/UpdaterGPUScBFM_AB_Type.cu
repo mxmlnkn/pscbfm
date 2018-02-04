@@ -460,8 +460,6 @@ __global__ void kernelCountFilteredCheck
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-
 
     auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     auto const & x0         = data.x;
@@ -527,8 +525,6 @@ __global__ void kernelSimulationScBFMPerformSpecies
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
@@ -565,8 +561,6 @@ __global__ void kernelCountFilteredPerform
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
@@ -604,8 +598,6 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
 {
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
-    auto const iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-
 
     auto const properties = dpPolymerFlags[ iMonomer ];
     if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
@@ -622,6 +614,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
   }
 }
+
 
 
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
