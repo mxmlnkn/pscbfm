@@ -380,7 +380,7 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
 using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    cudaTextureObject_t const              texPolymerSystem       ,
+    intCUDA     const * const __restrict__ dpPolymerSystem        ,
     T_Flags           * const __restrict__ dpPolymerFlags         ,
     uint32_t            const              iOffset                ,
     uint8_t           * const __restrict__ dpLatticeTmp           ,
@@ -396,10 +396,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
   int iGrid = 0;
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
   {
-    intCUDAVec< intCUDA >::value_type r0;
-    r0.x = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * ( iOffset + iMonomer ) + 0 );
-    r0.y = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * ( iOffset + iMonomer ) + 1 );
-    r0.z = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * ( iOffset + iMonomer ) + 2 );
+    auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
         rn = hash( hash( iMonomer ) ^ rSeed );
@@ -427,11 +424,8 @@ __global__ void kernelSimulationScBFMCheckSpecies
         for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
         {
             auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-            intCUDAVec< intCUDA >::value_type r1;
-            r1.x = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * iGlobalNeighbor + 0 );
-            r1.y = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * iGlobalNeighbor + 1 );
-            r1.z = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * iGlobalNeighbor + 2 );
-            if ( dpForbiddenBonds[ linearizeBondVectorIndex( r1.x - r0.x - dx, r1.y - r0.y - dy, r1.z - r0.z - dz ) ] )
+            auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
+            if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r0.x - dx, data2.y - r0.y - dy, data2.z - r0.z - dz ) ] )
             {
                 forbiddenBond = true;
                 break;
@@ -526,9 +520,8 @@ __global__ void kernelCountFilteredCheck
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    cudaTextureObject_t   const              texPolymerSystem ,
+    intCUDA       const * const __restrict__ dpPolymerSystem  ,
     T_Flags             * const __restrict__ dpPolymerFlags   ,
-    uint32_t              const              iOffset          ,
     uint8_t             * const __restrict__ dpLattice        ,
     uint32_t              const              nMonomers        ,
     cudaTextureObject_t   const              texLatticeTmp
@@ -540,10 +533,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         continue;
 
-    intCUDAVec< intCUDA >::value_type r0;
-    r0.x = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * ( iOffset + iMonomer ) + 0 );
-    r0.y = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * ( iOffset + iMonomer ) + 1 );
-    r0.z = tex1Dfetch< intCUDA >( texPolymerSystem, 3 * ( iOffset + iMonomer ) + 2 );
+    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
         continue;
@@ -826,7 +816,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     CUDA_ERROR( cudaMemset( mPolymerFlags->gpu, 0, mPolymerFlags->nBytes ) );
     /* Calculate offsets / prefix sum including the alignment */
     assert( mPolymerSystemSorted == NULL );
-    mPolymerSystemSorted = new MirroredTexture< intCUDA >( 3u * nMonomersPadded, mStream );
+    mPolymerSystemSorted = new MirroredVector< intCUDA >( 3u * nMonomersPadded, mStream );
     #ifndef NDEBUG
         std::memset( mPolymerSystemSorted.host, 0, mPolymerSystemSorted.nBytes );
     #endif
@@ -993,7 +983,6 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         pTarget[2] = mPolymerSystem[4*i+2];
     }
     mPolymerSystemSorted->pushAsync();
-    mPolymerSystemSorted->bind();
 
     checkSystem();
 
@@ -1417,7 +1406,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMCheckSpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
-                mPolymerSystemSorted->texture,
+                mPolymerSystemSorted->gpu,
                 mPolymerFlags->gpu,
                 iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu,
@@ -1447,9 +1436,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMPerformSpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
-                mPolymerSystemSorted->texture,
+                mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
-                iSubGroupOffset[ iSpecies ],
                 mLatticeOut->gpu,
                 mnElementsInGroup[ iSpecies ],
                 mLatticeTmp->texture
