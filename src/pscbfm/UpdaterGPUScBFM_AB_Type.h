@@ -178,7 +178,7 @@ private:
      * Note how this struct of array leads to yet another alignment problem
      * I think I need AlignedMatrices for this, too :(
      */
-    MirroredVector< intCUDA > * mPolymerSystemSorted;
+    MirroredTexture< intCUDA > * mPolymerSystemSorted;
     /**
      * These are to be used for storing the flags and chosen direction of
      * the old property tag.
