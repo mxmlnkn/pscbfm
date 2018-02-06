@@ -120,6 +120,8 @@ __device__ uint32_t hash( uint32_t a )
  *    cells are intermingled inbetween the used memory locations
  */
 
+/* for a in-depth description see comments in Fundamental/BitsCompileTime.hpp
+ * where it was copied from */
 template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded, unsigned char iStep >
 struct DiluteBitsCrumble { __device__ __host__ inline static T apply( T const & xLastStep )
 {
@@ -137,7 +139,6 @@ struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> { __device__ __host__ inline
     return x & BitPatterns::Ones< T, nBitsAllowed >::value;
 } };
 
-
 template< typename T, unsigned char nSpacing >
 __device__ __host__ inline T diluteBits( T const & rx )
 {
@@ -149,6 +150,24 @@ __device__ __host__ inline T diluteBits( T const & rx )
     return DiluteBitsCrumble< T, nSpacing, nStepsNeeded, ( nStepsNeeded > 0 ? nStepsNeeded-1 : 0 ) >::apply( rx );
 }
 
+/**
+ * Legacy function which ironically might be more readable than my version
+ * which derives and thereby documents in-code where the magic constants
+ * derive from :(
+ * Might be needed to compare performance to the template version.
+ *  => is slower by 1%
+ */
+/*
+__device__ uint32_t part1by2_d( uint32_t n )
+{
+    n&= 0x000003ff;
+    n = (n ^ (n << 16)) & 0xff0000ff; // 0b 0000 0000 1111 1111
+    n = (n ^ (n <<  8)) & 0x0300f00f; // 0b 1111 0000 0000 1111
+    n = (n ^ (n <<  4)) & 0x030c30c3; // 0b 0011 0000 1100 0011
+    n = (n ^ (n <<  2)) & 0x09249249; // 0b 1001 0010 0100 1001
+    return n;
+}
+*/
 
 namespace {
 
@@ -333,16 +352,28 @@ __device__ inline bool checkFront
         }
         #undef TMP_FETCH
     }
-#else /* this version can't be used for z-ordering! */
-    auto const x0Abs  =   ( x0              ) & dcBoxXM1;
-    auto const x0PDX  =   ( x0 + intCUDA(1) ) & dcBoxXM1;
-    auto const x0MDX  =   ( x0 - intCUDA(1) ) & dcBoxXM1;
-    auto const y0Abs  = ( ( y0              ) & dcBoxYM1 ) << dcBoxXLog2;
-    auto const y0PDY  = ( ( y0 + intCUDA(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-    auto const y0MDY  = ( ( y0 - intCUDA(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-    auto const z0Abs  = ( ( z0              ) & dcBoxZM1 ) << dcBoxXYLog2;
-    auto const z0PDZ  = ( ( z0 + intCUDA(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
-    auto const z0MDZ  = ( ( z0 - intCUDA(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+#else
+    #if defined( USE_ZCURVE_FOR_LATTICE )
+        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0              ) & dcBoxXM1 );
+        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + intCUDA(1) ) & dcBoxXM1 );
+        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - intCUDA(1) ) & dcBoxXM1 );
+        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0              ) & dcBoxYM1 ) << 1;
+        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + intCUDA(1) ) & dcBoxYM1 ) << 1;
+        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - intCUDA(1) ) & dcBoxYM1 ) << 1;
+        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0              ) & dcBoxZM1 ) << 2;
+        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + intCUDA(1) ) & dcBoxZM1 ) << 2;
+        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - intCUDA(1) ) & dcBoxZM1 ) << 2;
+    #else
+        auto const x0Abs  =   ( x0              ) & dcBoxXM1;
+        auto const x0PDX  =   ( x0 + intCUDA(1) ) & dcBoxXM1;
+        auto const x0MDX  =   ( x0 - intCUDA(1) ) & dcBoxXM1;
+        auto const y0Abs  = ( ( y0              ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0PDY  = ( ( y0 + intCUDA(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0MDY  = ( ( y0 - intCUDA(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const z0Abs  = ( ( z0              ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0PDZ  = ( ( z0 + intCUDA(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0MDZ  = ( ( z0 - intCUDA(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+    #endif
 
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
@@ -351,47 +382,59 @@ __device__ inline bool checkFront
     {
         case 0: //-+x
         {
-            auto const x1 = ( x0 + intCUDA(2)*dx ) & dcBoxXM1;
+            #if defined( USE_ZCURVE_FOR_LATTICE )
+                auto const x1 = diluteBits< uint32_t, 2 >( ( x0 + intCUDA(2)*dx ) & dcBoxXM1 );
+            #else
+                auto const x1 = ( x0 + intCUDA(2)*dx ) & dcBoxXM1;
+            #endif
             isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0MDY + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0Abs + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 + y0PDY + z0PDZ );
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0PDZ );
             break;
         }
         case 1: //-+y
         {
-            auto const y1 = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2;
+            #if defined( USE_ZCURVE_FOR_LATTICE )
+                auto const y1 = diluteBits< uint32_t, 2 >( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << 1;
+            #else
+                auto const y1 = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2;
+            #endif
             isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y1 + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y1 + z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y1 + z0PDZ );
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0PDZ );
             break;
         }
         case 2: //-+z
         {
-            auto const z1 = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
+            #if defined( USE_ZCURVE_FOR_LATTICE )
+                auto const z1 = diluteBits< uint32_t, 2 >( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << 2;
+            #else
+                auto const z1 = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
+            #endif
             isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0MDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0MDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0MDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0Abs + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0Abs + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0Abs + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX + y0PDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs + y0PDY + z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX + y0PDY + z1 );
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0MDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0MDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0MDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0Abs | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0Abs | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0Abs | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0PDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0PDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0PDY | z1 );
             break;
         }
     }
