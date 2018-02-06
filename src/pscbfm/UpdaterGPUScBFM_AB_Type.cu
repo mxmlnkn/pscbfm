@@ -19,6 +19,8 @@
 #include <stdint.h>
 #include <sstream>
 
+#include "Fundamental/BitsCompileTime.hpp"
+
 #include "cudacommon.hpp"
 #include "SelectiveLogger.hpp"
 
@@ -90,10 +92,81 @@ __device__ uint32_t hash( uint32_t a )
     return a;
 }
 
+
+/**
+ * Morton / Z-curve ordering is a mapping N^n->N: (x,y,..)->i
+ * When drawing a line by following i sequentially it looks like a
+ * fractal Z-Curve:
+ * @verbatim
+ * y\x |      |   0  |   1  |   2  |   3
+ * ----+------+------+------+------+------
+ * dec | bin  | 0b00 | 0b01 | 0b10 | 0b11
+ * ----+------+------+------+------+------
+ *  0  | 0b00 | 0000 | 0001 | 0100 | 0101
+ *     |      |   0  |   1  |   4  |   5
+ *  1  | 0b01 | 0010 | 0011 | 0110 | 0111
+ *     |      |   2  |   3  |   6  |   7
+ *  2  | 0b10 | 1000 | 1001 | 1100 | 1101
+ *     |      |   8  |   9  |  12  |  13
+ *  3  | 0b11 | 1010 | 1011 | 1110 | 1111
+ *     |      |  10  |  11  |  14  |  15
+ * @endverbatim
+ * As can be see from this:
+ *  - The (x,y)->i follows a simple scheme in the bit representation,
+ *    i.e. the bit representations of x and y get interleaved, for z
+ *    and higher coordinates it would be similar
+ *  - The grid must have a size of power of two in each dimension.
+ *    Padding a grid would be problematic, as the padded unused
+ *    cells are intermingled inbetween the used memory locations
+ */
+
+template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded, unsigned char iStep >
+struct DiluteBitsCrumble { inline static T apply( T const & xLastStep )
+{
+    auto x = DiluteBitsCrumble<T,nSpacing,nStepsNeeded,iStep-1>::apply( xLastStep );
+    auto constexpr iStep2Pow = 1llu << ( (nStepsNeeded-1) - iStep );
+    auto constexpr mask = BitPatterns::RectangularWave< T, iStep2Pow, iStep2Pow * nSpacing >::value;
+    x = ( x | ( x << ( iStep2Pow * nSpacing ) ) ) & mask;
+    return x;
+} };
+
+template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded >
+struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> { inline static T apply( T const & x )
+{
+    auto constexpr nBitsAllowed = 1 + ( sizeof(T) * CHAR_BIT - 1 ) / ( nSpacing + 1 );
+    return x & BitPatterns::Ones< T, nBitsAllowed >::value;
+} };
+
+
+template< typename T, unsigned char nSpacing >
+T inline diluteBits( T const & rx )
+{
+    static_assert( nSpacing > 0, "" );
+    auto constexpr nBitsAvailable = sizeof(T) * CHAR_BIT;
+    static_assert( nBitsAvailable > 0, "" );
+    auto constexpr nBitsAllowed = CompileTimeFunctions::ceilDiv( nBitsAvailable, nSpacing + 1 );
+    auto constexpr nStepsNeeded = 1 + CompileTimeFunctions::CeilLog< 2, nBitsAllowed >::value;
+    return DiluteBitsCrumble< T, nSpacing, nStepsNeeded, ( nStepsNeeded > 0 ? nStepsNeeded-1 : 0 ) >::apply( rx );
+}
+
+template< typename T >
+inline __host__ __device__ T interleave3( T const & x, T const & y, T const & z )
+{
+	return   diluteBits<T,2>(x) |
+           ( diluteBits<T,2>(y) << 1 ) |
+           ( diluteBits<T,2>(z) << 2 );
+}
+
+
+
+namespace {
+
 template< typename T >
 __device__ __host__ bool isPowerOfTwo( T const & x )
 {
     return ! ( x == T(0) ) && ! ( x & ( x - T(1) ) );
+}
+
 }
 
 uint32_t UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex

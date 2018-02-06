@@ -58,10 +58,10 @@ template< typename T, typename S >
 __host__ __device__
 inline T ceilDiv( T a, S b )
 {
-    assert( b != 0 );
+    assert( b != S(0) );
     assert( a == a );
     assert( b == b );
-    return (a+b-1)/b;
+    return ( a + b - T(1) ) / b;
 }
 
 #include <sstream>
