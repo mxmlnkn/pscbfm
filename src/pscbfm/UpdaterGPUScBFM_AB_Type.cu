@@ -121,7 +121,7 @@ __device__ uint32_t hash( uint32_t a )
  */
 
 template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded, unsigned char iStep >
-struct DiluteBitsCrumble { inline static T apply( T const & xLastStep )
+struct DiluteBitsCrumble { __device__ __host__ inline static T apply( T const & xLastStep )
 {
     auto x = DiluteBitsCrumble<T,nSpacing,nStepsNeeded,iStep-1>::apply( xLastStep );
     auto constexpr iStep2Pow = 1llu << ( (nStepsNeeded-1) - iStep );
@@ -131,7 +131,7 @@ struct DiluteBitsCrumble { inline static T apply( T const & xLastStep )
 } };
 
 template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded >
-struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> { inline static T apply( T const & x )
+struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> { __device__ __host__ inline static T apply( T const & x )
 {
     auto constexpr nBitsAllowed = 1 + ( sizeof(T) * CHAR_BIT - 1 ) / ( nSpacing + 1 );
     return x & BitPatterns::Ones< T, nBitsAllowed >::value;
@@ -139,7 +139,7 @@ struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> { inline static T apply( T c
 
 
 template< typename T, unsigned char nSpacing >
-T inline diluteBits( T const & rx )
+__device__ __host__ inline T diluteBits( T const & rx )
 {
     static_assert( nSpacing > 0, "" );
     auto constexpr nBitsAvailable = sizeof(T) * CHAR_BIT;
@@ -148,15 +148,6 @@ T inline diluteBits( T const & rx )
     auto constexpr nStepsNeeded = 1 + CompileTimeFunctions::CeilLog< 2, nBitsAllowed >::value;
     return DiluteBitsCrumble< T, nSpacing, nStepsNeeded, ( nStepsNeeded > 0 ? nStepsNeeded-1 : 0 ) >::apply( rx );
 }
-
-template< typename T >
-inline __host__ __device__ T interleave3( T const & x, T const & y, T const & z )
-{
-	return   diluteBits<T,2>(x) |
-           ( diluteBits<T,2>(y) << 1 ) |
-           ( diluteBits<T,2>(z) << 2 );
-}
-
 
 
 namespace {
@@ -169,6 +160,7 @@ __device__ __host__ bool isPowerOfTwo( T const & x )
 
 }
 
+#define USE_ZCURVE_FOR_LATTICE
 uint32_t UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
 (
     uint32_t const & ix,
@@ -176,14 +168,20 @@ uint32_t UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
     uint32_t const & iz
 )
 {
-    #ifdef NOMAGIC
+    #if defined ( USE_ZCURVE_FOR_LATTICE )
+        return   diluteBits< uint32_t, 2 >( ix & mBoxXM1 )        |
+               ( diluteBits< uint32_t, 2 >( iy & mBoxYM1 ) << 1 ) |
+               ( diluteBits< uint32_t, 2 >( iz & mBoxZM1 ) << 2 );
+    #elif defined( NOMAGIC )
         return ( ix % mBoxX ) +
                ( iy % mBoxY ) * mBoxX +
                ( iz % mBoxZ ) * mBoxX * mBoxY;
     #else
-        assert( isPowerOfTwo( mBoxXM1 + 1 ) );
-        assert( isPowerOfTwo( mBoxYM1 + 1 ) );
-        assert( isPowerOfTwo( mBoxZM1 + 1 ) );
+        #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
+            assert( isPowerOfTwo( mBoxXM1 + 1 ) );
+            assert( isPowerOfTwo( mBoxYM1 + 1 ) );
+            assert( isPowerOfTwo( mBoxZM1 + 1 ) );
+        #endif
         return   ( ix & mBoxXM1 ) +
                ( ( iy & mBoxYM1 ) << mBoxXLog2  ) +
                ( ( iz & mBoxZM1 ) << mBoxXYLog2 );
@@ -197,14 +195,20 @@ __device__ inline uint32_t linearizeBoxVectorIndex
     uint32_t const & iz
 )
 {
-    #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
-        assert( isPowerOfTwo( dcBoxXM1 + 1 ) );
-        assert( isPowerOfTwo( dcBoxYM1 + 1 ) );
-        assert( isPowerOfTwo( dcBoxZM1 + 1 ) );
+    #if defined ( USE_ZCURVE_FOR_LATTICE )
+        return   diluteBits< uint32_t, 2 >( ix & dcBoxXM1 )        |
+               ( diluteBits< uint32_t, 2 >( iy & dcBoxYM1 ) << 1 ) |
+               ( diluteBits< uint32_t, 2 >( iz & dcBoxZM1 ) << 2 );
+    #else
+        #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
+            assert( isPowerOfTwo( dcBoxXM1 + 1 ) );
+            assert( isPowerOfTwo( dcBoxYM1 + 1 ) );
+            assert( isPowerOfTwo( dcBoxZM1 + 1 ) );
+        #endif
+        return   ( ix & dcBoxXM1 ) +
+               ( ( iy & dcBoxYM1 ) << dcBoxXLog2  ) +
+               ( ( iz & dcBoxZM1 ) << dcBoxXYLog2 );
     #endif
-    return   ( ix & dcBoxXM1 ) +
-           ( ( iy & dcBoxYM1 ) << dcBoxXLog2  ) +
-           ( ( iz & dcBoxZM1 ) << dcBoxXYLog2 );
 }
 
 /**
@@ -268,7 +272,7 @@ __device__ inline bool checkFront
     r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 7 */
     r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 8 */
     #undef TMP_FETCH
-#elif 0 // defined( NOMAGIC )
+#elif 1 // defined( NOMAGIC )
     intCUDA const shift = 4*(axis & 1)-2;
     switch ( axis >> 1 )
     {
@@ -329,7 +333,7 @@ __device__ inline bool checkFront
         }
         #undef TMP_FETCH
     }
-#else
+#else /* this version can't be used for z-ordering! */
     auto const x0Abs  =   ( x0              ) & dcBoxXM1;
     auto const x0PDX  =   ( x0 + intCUDA(1) ) & dcBoxXM1;
     auto const x0MDX  =   ( x0 - intCUDA(1) ) & dcBoxXM1;
@@ -1301,9 +1305,22 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
     for ( size_t i = 0; i < nAllMonomers; ++i )
     {
-        mLattice[ linearizeBoxVectorIndex( mPolymerSystem[ 4*i+0 ],
-                                           mPolymerSystem[ 4*i+1 ],
-                                           mPolymerSystem[ 4*i+2 ] ) ] = 1;
+        auto const j = linearizeBoxVectorIndex( mPolymerSystem[ 4*i+0 ],
+                                                mPolymerSystem[ 4*i+1 ],
+                                                mPolymerSystem[ 4*i+2 ] );
+        if ( j >= mBoxX * mBoxY * mBoxZ )
+        {
+            std::stringstream msg;
+            msg
+            << "[populateLattice] " << i << " -> ("
+            << mPolymerSystem[ 4*i+0 ] << ","
+            << mPolymerSystem[ 4*i+1 ] << ","
+            << mPolymerSystem[ 4*i+2 ] << ") -> " << j << " is out of range "
+            << "of (" << mBoxX << "," << mBoxY << "," << mBoxZ << ") = "
+            << mBoxX * mBoxY * mBoxZ << "\n";
+            throw std::runtime_error( msg.str() );
+        }
+        mLattice[ j ] = 1;
     }
 }
 

@@ -295,6 +295,12 @@ private:
     static long int const   mnThreads = 256;
     std::vector< long int > mnBlocksForGroup;
 
+    /**
+     * If we constrict each index to 1024=2^10 which already is quite large,
+     * 256=2^8 being normally large, then this means that the linearzed index
+     * should have a range of 2^30, meaning uint32_t as output is pretty
+     * fixed with uint16_t being way too few bits
+     */
     uint32_t linearizeBoxVectorIndex
     (
         uint32_t const & ix,
