@@ -291,7 +291,7 @@ __device__ inline bool checkFront
     r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 7 */
     r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 8 */
     #undef TMP_FETCH
-#elif 1 // defined( NOMAGIC )
+#elif 0 // defined( NOMAGIC )
     intCUDA const shift = 4*(axis & 1)-2;
     switch ( axis >> 1 )
     {
