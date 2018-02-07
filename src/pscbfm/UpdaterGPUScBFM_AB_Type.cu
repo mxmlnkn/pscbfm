@@ -45,9 +45,9 @@ __device__ __constant__ intCUDA DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
  * the same constant */
-__device__ __constant__ uint32_t dcBoxXM1   ;  // mLattice size in X-1
-__device__ __constant__ uint32_t dcBoxYM1   ;  // mLattice size in Y-1
-__device__ __constant__ uint32_t dcBoxZM1   ;  // mLattice size in Z-1
+__device__ __constant__ intCUDA dcBoxXM1;  // mLattice size in X-1
+__device__ __constant__ intCUDA dcBoxYM1;  // mLattice size in Y-1
+__device__ __constant__ intCUDA dcBoxZM1;  // mLattice size in Z-1
 __device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
 __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
 
