@@ -392,15 +392,18 @@ __device__ inline bool checkFront
             #else
                 auto const x1 = ( x0 + intCUDA(2)*dx ) & dcBoxXM1;
             #endif
-            is[0] = x1 | y0MDY | z0Abs;
-            is[1] = x1 | y0Abs | z0Abs;
-            is[2] = x1 | y0PDY | z0Abs;
-            is[3] = x1 | y0MDY | z0MDZ;
-            is[4] = x1 | y0Abs | z0MDZ;
-            is[5] = x1 | y0PDY | z0MDZ;
-            is[6] = x1 | y0MDY | z0PDZ;
-            is[7] = x1 | y0Abs | z0PDZ;
-            is[8] = x1 | y0PDY | z0PDZ;
+            is[2]  = x1 | z0Abs;
+            is[0]  = is[2] | y0MDY;
+            is[1]  = is[2] | y0Abs;
+            is[2] |=         y0PDY;
+            is[5]  = x1 | z0MDZ;
+            is[3]  = is[5] | y0MDY;
+            is[4]  = is[5] | y0Abs;
+            is[5] |=         y0PDY;
+            is[8]  = x1 | z0PDZ;
+            is[6]  = is[8] | y0MDY;
+            is[7]  = is[8] | y0Abs;
+            is[8] |=         y0PDY;
             break;
         }
         case 1: //-+y
@@ -410,15 +413,18 @@ __device__ inline bool checkFront
             #else
                 auto const y1 = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2;
             #endif
-            is[0] = x0MDX | y1 | z0MDZ;
-            is[1] = x0Abs | y1 | z0MDZ;
-            is[2] = x0PDX | y1 | z0MDZ;
-            is[3] = x0MDX | y1 | z0Abs;
-            is[4] = x0Abs | y1 | z0Abs;
-            is[5] = x0PDX | y1 | z0Abs;
-            is[6] = x0MDX | y1 | z0PDZ;
-            is[7] = x0Abs | y1 | z0PDZ;
-            is[8] = x0PDX | y1 | z0PDZ;
+            is[2]  = y1 | z0MDZ;
+            is[0]  = is[2] | x0MDX;
+            is[1]  = is[2] | x0Abs;
+            is[2] |=         x0PDX;
+            is[5]  = y1 | z0Abs;
+            is[3]  = is[5] | x0MDX;
+            is[4]  = is[5] | x0Abs;
+            is[5] |=         x0PDX;
+            is[8]  = y1 | z0PDZ;
+            is[6]  = is[8] | x0MDX;
+            is[7]  = is[8] | x0Abs;
+            is[8] |=         x0PDX;
             break;
         }
         case 2: //-+z
@@ -428,15 +434,18 @@ __device__ inline bool checkFront
             #else
                 auto const z1 = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
             #endif
-            is[0] = x0MDX | y0MDY | z1;
-            is[1] = x0Abs | y0MDY | z1;
-            is[2] = x0PDX | y0MDY | z1;
-            is[3] = x0MDX | y0Abs | z1;
-            is[4] = x0Abs | y0Abs | z1;
-            is[5] = x0PDX | y0Abs | z1;
-            is[6] = x0MDX | y0PDY | z1;
-            is[7] = x0Abs | y0PDY | z1;
-            is[8] = x0PDX | y0PDY | z1;
+            is[2]  = z1 | y0MDY;
+            is[0]  = is[2] | x0MDX;
+            is[1]  = is[2] | x0Abs;
+            is[2] |=         x0PDX;
+            is[5]  = z1 | y0Abs;
+            is[3]  = is[5] | x0MDX;
+            is[4]  = is[5] | x0Abs;
+            is[5] |=         x0PDX;
+            is[8]  = z1 | y0PDY;
+            is[6]  = is[8] | x0MDX;
+            is[7]  = is[8] | x0Abs;
+            is[8] |=         x0PDX;
             break;
         }
     }
