@@ -53,6 +53,81 @@ inline void checkCudaError
 #endif
 
 
+/**
+ * some helper function to be used in templated kernels to e.g. get the
+ * corresponing CUDA vector 4 for a given template parameter
+ * http://www.icl.utk.edu/~mgates3/docs/cuda.html
+ */
+template< typename T > struct CudaVec3;
+template< typename T > struct CudaVec4;
+template< typename T > struct CudaVec3To4;
+template< typename T > struct CudaVec4To3;
+#define TMP_CUDAVECS( ELEMENTTYPE, CUDATYPENAME ) \
+template<> struct CudaVec3< ELEMENTTYPE >{ typedef CUDATYPENAME##3 value_type; }; \
+template<> struct CudaVec4< ELEMENTTYPE >{ typedef CUDATYPENAME##4 value_type; }; \
+template<> struct CudaVec3To4< CUDATYPENAME##3 >{ typedef CUDATYPENAME##4 value_type; }; \
+template<> struct CudaVec4To3< CUDATYPENAME##4 >{ typedef CUDATYPENAME##3 value_type; };
+#define TMP_CUDAVECS_UI( ELEMENTTYPE, CUDATYPENAME ) \
+TMP_CUDAVECS( u##ELEMENTTYPE, u##CUDATYPENAME ) \
+TMP_CUDAVECS( ELEMENTTYPE, CUDATYPENAME )
+TMP_CUDAVECS( int8_t , char  )
+TMP_CUDAVECS( int16_t, short )
+TMP_CUDAVECS( int32_t, int   )
+TMP_CUDAVECS( int64_t, long  )
+
+/**
+ * Some overloads to automatically use SIMD intrinsics if available, if not
+ * then this just saves boiler-plate code, dunno why this isn't overloaded
+ * like this by default at least not in CUDA 7 ...
+ * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#simd-video
+ */
+#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
+#   define TMP_OPERATORP_UI4( UI )                                             \
+    __device__ inline UI##char4 operator+                                      \
+    (                                                                          \
+        UI##char4 const & x,                                                   \
+        UI##char4 const & y                                                    \
+    )                                                                          \
+    {                                                                          \
+        UI##char4 z;                                                           \
+        * reinterpret_cast< unsigned int * >( & z ) = __vadd4(                 \
+            * reinterpret_cast< unsigned int const * >( & x ),                 \
+            * reinterpret_cast< unsigned int const * >( & y )                  \
+        );                                                                     \
+        return z;                                                              \
+    }                                                                          \
+                                                                               \
+    __device__ inline UI##short4 operator+                                     \
+    (                                                                          \
+        UI##short4 const & x,                                                  \
+        UI##short4 const & y                                                   \
+    )                                                                          \
+    {                                                                          \
+        UI##short4 z;                                                          \
+        * reinterpret_cast< unsigned int * >( & z ) = __vadd2(                 \
+            * reinterpret_cast< unsigned int const * >( & x ),                 \
+            * reinterpret_cast< unsigned int const * >( & y )                  \
+        );                                                                     \
+        *( reinterpret_cast< unsigned int * >( & z ) + 1 ) = __vadd2(          \
+            *( reinterpret_cast< unsigned int const * >( & x ) + 1 ),          \
+            *( reinterpret_cast< unsigned int const * >( & y ) + 1 )           \
+        );                                                                     \
+        return z;                                                              \
+    }
+    TMP_OPERATORP_UI4()
+    TMP_OPERATORP_UI4(u)
+#   undef TMP_OPERATORP_UI4
+#else
+    __device__ inline char4 operator+( char4 const & x, char4 const & y ) {
+        return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+    __device__ inline short4 operator+( short4 const & x, short4 const & y ) {
+        return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+#endif
+__device__ inline int4 operator+( int4 const & x, int4 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+__device__ inline long4 operator+( long4 const & x, long4 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+
 
 template< typename T, typename S >
 __host__ __device__

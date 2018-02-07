@@ -547,8 +547,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
   int iGrid = 0;
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
   {
-    auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
-    //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // not faster nor slower
+    auto const r0Raw = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+    /* upcast int3 to int4 in preparation to use PTX SIMD instructiosn */
+    uint4 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z, 0 }; // not faster nor slower
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
         rn = hash( hash( iMonomer ) ^ rSeed );
@@ -590,7 +591,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
              * texture used above. Won't this result in read-after-write race-conditions?
              * Then again the written / changed bits are never used in the above code ... */
             properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
-            dpLatticeTmp[ linearizeBoxVectorIndex( r0.x+dx, r0.y+dy, r0.z+dz ) ] = 1;
+            dpLatticeTmp[ linearizeBoxVectorIndex( r0.x + dx, r0.y + dy, r0.z + dz ) ] = 1;
         }
 #ifdef NONPERIODICITY
     }
@@ -886,10 +887,11 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     CUDA_ERROR( cudaMemcpyToSymbol( dpForbiddenBonds, tmpForbiddenBonds, sizeof(bool)*512 ) );
     free( tmpForbiddenBonds );
 
-    /* create a table mapping the random int to directions whereto move the monomers */
-    uint32_t tmp_DXTable[6] = { -1,1,  0,0,  0,0 };
-    uint32_t tmp_DYTable[6] = {  0,0, -1,1,  0,0 };
-    uint32_t tmp_DZTable[6] = {  0,0,  0,0, -1,1 };
+    /* create a table mapping the random int to directions whereto move the
+     * monomers. We can use negative numbers, because (0u-1u)+1u still is 0u */
+    uint32_t tmp_DXTable[6] = { 0u-1u,1,  0,0,  0,0 };
+    uint32_t tmp_DYTable[6] = {  0,0, 0u-1u,1,  0,0 };
+    uint32_t tmp_DZTable[6] = {  0,0,  0,0, 0u-1u,1 };
     CUDA_ERROR( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( tmp_DXTable ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( tmp_DXTable ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( tmp_DXTable ) ) );
