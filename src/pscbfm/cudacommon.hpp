@@ -74,6 +74,52 @@ TMP_CUDAVECS( int8_t , char  )
 TMP_CUDAVECS( int16_t, short )
 TMP_CUDAVECS( int32_t, int   )
 TMP_CUDAVECS( int64_t, long  )
+#undef TMP_CUDAVECS
+#undef TMP_CUDAVECS_UI
+
+/**
+ * Some debug output for understanding compilation
+ * @see http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#cuda-arch
+ * Sources get compiled two times __CUDA_ARCH__
+ * @see https://devtalk.nvidia.com/default/topic/516937/__cuda_arch__-undefined-33-/
+ * @see http://www.mersenneforum.org/showthread.php?t=18668
+ * @see https://devtalk.nvidia.com/default/topic/496061/is-__cuda_arch__-broken-/
+ * Normally __CUDA_ARCH__ shouldn't be used in headers! If so, watch out, that
+ * is only used inside the function body, so that for host compilation it still
+ * is visible... then again if it is a device function, why does it have to
+ * be visible ... I'm confused
+ * @see http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#cuda-compilation-trajectory
+ * @see http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#using-separate-compilation-in-cuda
+ */
+#if 0
+
+#if defined( __CUDACC__ )
+#   warning __CUDACC__ defined
+#else
+#   warning __CUDACC__ NOT defined
+#endif
+
+#if defined( __CUDA_ARCH__ )
+#   if __CUDA_ARCH__ < 300
+#       warning __CUDA_ARCH__ < 300
+#   elif __CUDA_ARCH__ <= 300
+#       warning __CUDA_ARCH__ == 300
+#   elif __CUDA_ARCH__ <= 350
+#       warning __CUDA_ARCH__ in (300,350]
+#   elif __CUDA_ARCH__ <= 400
+#       warning __CUDA_ARCH__ in (350,400]
+#   elif __CUDA_ARCH__ <= 500
+#       warning __CUDA_ARCH__ in (400,500]
+#   elif __CUDA_ARCH__ <= 600
+#       warning __CUDA_ARCH__ in (500,600]
+#   else
+#       warning __CUDA_ARCH__ > 300
+#   endif
+#else
+#   warning __CUDA_ARCH__ NOT defined!
+#endif
+
+#endif
 
 /**
  * Some overloads to automatically use SIMD intrinsics if available, if not
@@ -116,17 +162,52 @@ TMP_CUDAVECS( int64_t, long  )
     }
     TMP_OPERATORP_UI4()
     TMP_OPERATORP_UI4(u)
-#   undef TMP_OPERATORP_UI4
+    #undef TMP_OPERATORP_UI4
 #else
+    /**
+     * without explicit conversions, yields narrowing warning, because of this:
+     * https://stackoverflow.com/questions/4814668/addition-of-two-chars-produces-int
+     * ... whyyyyy, I'm dying a bit inside not to talk about the time I lost
+     * tracking this down
+     */
     __device__ inline char4 operator+( char4 const & x, char4 const & y ) {
-        return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+        return { char(x.x + y.x), char(x.y + y.y), char(x.z + y.z), char(x.w + y.w) }; }
     __device__ inline short4 operator+( short4 const & x, short4 const & y ) {
-        return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+        return { short(x.x + y.x), short(x.y + y.y), short(x.z + y.z), short(x.w + y.w) }; }
+    __device__ inline uchar4 operator+( uchar4 const & x, uchar4 const & y )
+    {
+        return { (unsigned char)(x.x + y.x),
+                 (unsigned char)(x.y + y.y),
+                 (unsigned char)(x.z + y.z),
+                 (unsigned char)(x.w + y.w) };
+     }
+    __device__ inline ushort4 operator+( ushort4 const & x, ushort4 const & y )
+    {
+        return { (unsigned short)(x.x + y.x),
+                 (unsigned short)(x.y + y.y),
+                 (unsigned short)(x.z + y.z),
+                 (unsigned short)(x.w + y.w) };
+    }
 #endif
 __device__ inline int4 operator+( int4 const & x, int4 const & y ) {
     return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
 __device__ inline long4 operator+( long4 const & x, long4 const & y ) {
     return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+__device__ inline uint4 operator+( uint4 const & x, uint4 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+__device__ inline ulong4 operator+( ulong4 const & x, ulong4 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
+
+/**
+ * It is utterly confusing that
+ * #if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 0
+ *   __device__ inline int f( void ){}
+ * #elif defined( __CUDA_ARCH__ )
+ *   __device__ inline int f( void ){}
+ * #endif
+ * does not work if called from inside a __global__ function, but the
+ * lower code still seems to never be used ...
+ */
 
 
 template< typename T, typename S >
@@ -688,6 +769,7 @@ inline void getCudaDeviceProperties
 
 #endif
 
+#if defined( __CUDACC__ )
 #if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ < 600
 /**
  * atomicAdd for double is not natively implemented, because it's not
@@ -709,6 +791,7 @@ double atomicAdd( double* address, double val )
     } while (assumed != old);
     return __longlong_as_double(old);
 }
+#endif
 #endif
 
 
