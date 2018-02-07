@@ -383,24 +383,35 @@ __device__ inline bool checkFront
 
     uint32_t is[9];
 
+    #if defined( USE_ZCURVE_FOR_LATTICE )
+        switch ( axis >> intCUDA(1) )
+        {
+            case 0: is[7] = ( x0 + intCUDA(2)*dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + intCUDA(2)*dy ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + intCUDA(2)*dz ) & dcBoxZM1; break;
+        }
+        is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
+    #else
+        switch ( axis >> intCUDA(1) )
+        {
+            case 0: is[7] =   ( x0 + intCUDA(2)*dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+        }
+    #endif
     switch ( axis >> intCUDA(1) )
     {
         case 0: //-+x
         {
-            #if defined( USE_ZCURVE_FOR_LATTICE )
-                auto const x1 = diluteBits< uint32_t, 2 >( ( x0 + intCUDA(2)*dx ) & dcBoxXM1 );
-            #else
-                auto const x1 = ( x0 + intCUDA(2)*dx ) & dcBoxXM1;
-            #endif
-            is[2]  = x1 | z0Abs;
+            is[2]  = is[7] | z0Abs;
+            is[5]  = is[7] | z0MDZ;
+            is[8]  = is[7] | z0PDZ;
             is[0]  = is[2] | y0MDY;
             is[1]  = is[2] | y0Abs;
             is[2] |=         y0PDY;
-            is[5]  = x1 | z0MDZ;
             is[3]  = is[5] | y0MDY;
             is[4]  = is[5] | y0Abs;
             is[5] |=         y0PDY;
-            is[8]  = x1 | z0PDZ;
             is[6]  = is[8] | y0MDY;
             is[7]  = is[8] | y0Abs;
             is[8] |=         y0PDY;
@@ -408,20 +419,15 @@ __device__ inline bool checkFront
         }
         case 1: //-+y
         {
-            #if defined( USE_ZCURVE_FOR_LATTICE )
-                auto const y1 = diluteBits< uint32_t, 2 >( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << 1;
-            #else
-                auto const y1 = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2;
-            #endif
-            is[2]  = y1 | z0MDZ;
+            is[2]  = is[7] | z0MDZ;
+            is[5]  = is[7] | z0Abs;
+            is[8]  = is[7] | z0PDZ;
             is[0]  = is[2] | x0MDX;
             is[1]  = is[2] | x0Abs;
             is[2] |=         x0PDX;
-            is[5]  = y1 | z0Abs;
             is[3]  = is[5] | x0MDX;
             is[4]  = is[5] | x0Abs;
             is[5] |=         x0PDX;
-            is[8]  = y1 | z0PDZ;
             is[6]  = is[8] | x0MDX;
             is[7]  = is[8] | x0Abs;
             is[8] |=         x0PDX;
@@ -429,20 +435,15 @@ __device__ inline bool checkFront
         }
         case 2: //-+z
         {
-            #if defined( USE_ZCURVE_FOR_LATTICE )
-                auto const z1 = diluteBits< uint32_t, 2 >( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << 2;
-            #else
-                auto const z1 = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
-            #endif
-            is[2]  = z1 | y0MDY;
+            is[2]  = is[7] | y0MDY;
+            is[5]  = is[7] | y0Abs;
+            is[8]  = is[7] | y0PDY;
             is[0]  = is[2] | x0MDX;
             is[1]  = is[2] | x0Abs;
             is[2] |=         x0PDX;
-            is[5]  = z1 | y0Abs;
             is[3]  = is[5] | x0MDX;
             is[4]  = is[5] | x0Abs;
             is[5] |=         x0PDX;
-            is[8]  = z1 | y0PDY;
             is[6]  = is[8] | x0MDX;
             is[7]  = is[8] | x0Abs;
             is[8] |=         x0PDX;
@@ -606,9 +607,9 @@ __global__ void kernelCountFilteredCheck
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
   {
     auto const data = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
-    auto const & x0         = data.x;
-    auto const & y0         = data.y;
-    auto const & z0         = data.z;
+    auto const & x0 = data.x;
+    auto const & y0 = data.y;
+    auto const & z0 = data.z;
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     T_Flags const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
 
