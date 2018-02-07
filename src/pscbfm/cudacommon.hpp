@@ -126,8 +126,10 @@ TMP_CUDAVECS( int64_t, long  )
  * then this just saves boiler-plate code, dunno why this isn't overloaded
  * like this by default at least not in CUDA 7 ...
  * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#simd-video
+ * preliminary benchmarks indicated using __vadd2 being slower than two normal
+ * adds, therefore deactivate wtih false
  */
-#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
+#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300 & false
 #   define TMP_OPERATORP_UI4( UI )                                             \
     __device__ inline UI##char4 operator+                                      \
     (                                                                          \
@@ -170,6 +172,23 @@ TMP_CUDAVECS( int64_t, long  )
      * ... whyyyyy, I'm dying a bit inside not to talk about the time I lost
      * tracking this down
      */
+    __device__ inline char3 operator+( char3 const & x, char3 const & y ) {
+        return { char(x.x + y.x), char(x.y + y.y), char(x.z + y.z) }; }
+    __device__ inline short3 operator+( short3 const & x, short3 const & y ) {
+        return { short(x.x + y.x), short(x.y + y.y), short(x.z + y.z) }; }
+    __device__ inline uchar3 operator+( uchar3 const & x, uchar3 const & y )
+    {
+        return { (unsigned char)(x.x + y.x),
+                 (unsigned char)(x.y + y.y),
+                 (unsigned char)(x.z + y.z) };
+     }
+    __device__ inline ushort3 operator+( ushort3 const & x, ushort3 const & y )
+    {
+        return { (unsigned short)(x.x + y.x),
+                 (unsigned short)(x.y + y.y),
+                 (unsigned short)(x.z + y.z) };
+    }
+
     __device__ inline char4 operator+( char4 const & x, char4 const & y ) {
         return { char(x.x + y.x), char(x.y + y.y), char(x.z + y.z), char(x.w + y.w) }; }
     __device__ inline short4 operator+( short4 const & x, short4 const & y ) {
@@ -189,6 +208,15 @@ TMP_CUDAVECS( int64_t, long  )
                  (unsigned short)(x.w + y.w) };
     }
 #endif
+__device__ inline int3 operator+( int3 const & x, int3 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z }; }
+__device__ inline long3 operator+( long3 const & x, long3 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z }; }
+__device__ inline uint3 operator+( uint3 const & x, uint3 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z }; }
+__device__ inline ulong3 operator+( ulong3 const & x, ulong3 const & y ) {
+    return { x.x + y.x, x.y + y.y, x.z + y.z }; }
+
 __device__ inline int4 operator+( int4 const & x, int4 const & y ) {
     return { x.x + y.x, x.y + y.y, x.z + y.z, x.w + y.w }; }
 __device__ inline long4 operator+( long4 const & x, long4 const & y ) {

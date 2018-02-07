@@ -561,9 +561,11 @@ __global__ void kernelSimulationScBFMCheckSpecies
     /* int4 const dr = { DXTable_d[ direction ],
                       DYTable_d[ direction ],
                       DZTable_d[ direction ], 0 }; */
-    int3 const r1 = { r0.x + DXTable_d[ direction ],
-                      r0.y + DYTable_d[ direction ],
-                      r0.z + DZTable_d[ direction ] };
+    short4 dr = { DXTableIntCUDA_d[ direction ],
+                  DYTableIntCUDA_d[ direction ],
+                  DZTableIntCUDA_d[ direction ] };
+    short4 r0s = { r0.x, r0.y, r0.z, 0 };
+    short4 const r1 = r0s + dr;
 
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
