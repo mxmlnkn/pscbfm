@@ -230,66 +230,6 @@ __device__ inline uint32_t linearizeBoxVectorIndex
     #endif
 }
 
-#define USE_BITPACKING
-#ifdef USE_BITPACKING
-    template< typename T > __device__ __host__ inline
-    T bitpackedGet( T const * const & p, uint32_t const & i )
-    {
-        /**
-         * >> 3, because 3 bits = 2^3=8 numbers are used for sub-byte indexing,
-         * i.e. we divide the index i by 8 which is equal to the space we save
-         * by bitpacking.
-         * & 7, because 7 = 0b111, i.e. we are only interested in the last 3
-         * bits specifying which subbyte element we want
-         */
-        return ( p[ i >> 3 ] >> ( i & T(7) ) ) & T(1);
-    }
-
-    template< typename T > __device__ inline
-    T bitpackedTextureGet( cudaTextureObject_t const & p, uint32_t const & i )
-    {
-        return ( tex1Dfetch<T>( p, i >> 3 ) >> ( i & T(7) ) ) & T(1);
-    }
-
-    /**
-     * Because the smalles atomic is for int (4x uint8_t) we need to
-     * cast the array to that and then do a bitpacking for the whole 32 bits
-     * instead of 8 bits
-     * I.e. we need to address 32 subbits, i.e. >>3 becomes >>5
-     * and &7 becomes &31 = 0b11111 = 0x1F
-     */
-    template< typename T > __device__ __host__ inline
-    void bitpackedSet( T * const __restrict__ p, uint32_t const & i )
-    {
-        static_assert( sizeof(int) == 4, "" );
-        #ifdef __CUDA_ARCH__
-            atomicOr ( (int*) p + ( i >> 5 ),    T(1) << ( i & T( 0x1F ) )   );
-        #else
-            p[ i >> 3 ] |= T(1) << ( i & T(7) );
-        #endif
-    }
-
-    template< typename T > __device__ __host__ inline
-    void bitpackedUnset( T * const __restrict__ p, uint32_t const & i )
-    {
-        #ifdef __CUDA_ARCH__
-            atomicAnd( (int*) p + ( i >> 5 ), ~( T(1) << ( i & T( 0x1F ) ) ) );
-        #else
-            p[ i >> 3 ] &= ~( T(1) << ( i & T(7) ) );
-        #endif
-    }
-#else
-    template< typename T > __device__ __host__ inline
-    T bitpackedGet( T const * const & p, uint32_t const & i ){ return p[i]; }
-    template< typename T > __device__ inline
-    T bitpackedTextureGet( cudaTextureObject_t const & p, uint32_t const & i ) {
-        return tex1Dfetch<T>(p,i); }
-    template< typename T > __device__ __host__ inline
-    void bitpackedSet  ( T * const __restrict__ p, uint32_t const & i ){ p[i] = 1; }
-    template< typename T > __device__ __host__ inline
-    void bitpackedUnset( T * const __restrict__ p, uint32_t const & i ){ p[i] = 0; }
-#endif
-
 /**
  * Checks the 3x3 grid one in front of the new position in the direction of the
  * move given by axis.
@@ -328,7 +268,7 @@ __device__ inline bool checkFront
     bool isOccupied = false;
 #if 0
     #define TMP_FETCH( x,y,z ) \
-        bitpackedTextureGet< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+        tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
     auto const shift  = intCUDA(4) * ( axis & intCUDA(1) ) - intCUDA(2);
     auto const iMove = axis >> intCUDA(1);
     /* reduce branching by parameterizing the access axis, but that
@@ -356,7 +296,7 @@ __device__ inline bool checkFront
     switch ( axis >> 1 )
     {
         #define TMP_FETCH( x,y,z ) \
-            bitpackedTextureGet< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+            tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
         case 0: //-+x
         {
             uint32_t const x1 = x0 + shift;
@@ -438,7 +378,6 @@ __device__ inline bool checkFront
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
     auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
-
     switch ( axis >> intCUDA(1) )
     {
         case 0: //-+x
@@ -449,15 +388,15 @@ __device__ inline bool checkFront
                 auto const x1 = ( x0 + intCUDA(2)*dx ) & dcBoxXM1;
             #endif
             isOccupied =
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0MDY | z0Abs ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0Abs | z0Abs ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0PDY | z0Abs ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0MDY | z0MDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0Abs | z0MDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0PDY | z0MDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0MDY | z0PDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0Abs | z0PDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x1 | y0PDY | z0PDZ );
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0PDZ );
             break;
         }
         case 1: //-+y
@@ -468,15 +407,15 @@ __device__ inline bool checkFront
                 auto const y1 = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2;
             #endif
             isOccupied =
-                bitpackedTextureGet< uint8_t >( texLattice, x0MDX | y1 | z0MDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0Abs | y1 | z0MDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0PDX | y1 | z0MDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0MDX | y1 | z0Abs ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0Abs | y1 | z0Abs ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0PDX | y1 | z0Abs ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0MDX | y1 | z0PDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0Abs | y1 | z0PDZ ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0PDX | y1 | z0PDZ );
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0MDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0Abs ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0PDZ ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0PDZ );
             break;
         }
         case 2: //-+z
@@ -487,15 +426,15 @@ __device__ inline bool checkFront
                 auto const z1 = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
             #endif
             isOccupied =
-                bitpackedTextureGet< uint8_t >( texLattice, x0MDX | y0MDY | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0Abs | y0MDY | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0PDX | y0MDY | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0MDX | y0Abs | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0Abs | y0Abs | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0PDX | y0Abs | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0MDX | y0PDY | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0Abs | y0PDY | z1 ) |
-                bitpackedTextureGet< uint8_t >( texLattice, x0PDX | y0PDY | z1 );
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0MDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0MDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0MDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0Abs | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0Abs | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0Abs | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0PDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0PDY | z1 ) |
+                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0PDY | z1 );
             break;
         }
     }
@@ -619,7 +558,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
              * texture used above. Won't this result in read-after-write race-conditions?
              * Then again the written / changed bits are never used in the above code ... */
             properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
-            bitpackedSet( dpLatticeTmp, linearizeBoxVectorIndex( r0.x+dx, r0.y+dy, r0.z+dz ) );
+            dpLatticeTmp[ linearizeBoxVectorIndex( r0.x+dx, r0.y+dy, r0.z+dz ) ] = 1;
         }
 #ifdef NONPERIODICITY
     }
@@ -721,12 +660,10 @@ __global__ void kernelSimulationScBFMPerformSpecies
 
     /* If possible, perform move now on normal lattice */
     dpPolymerFlags[ iMonomer ] = properties | T_Flags(2); // indicating allowed move
-    bitpackedUnset( dpLattice, linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) );
-    bitpackedSet  ( dpLattice, linearizeBoxVectorIndex(
-        r0.x + DXTable_d[ direction ],
-        r0.y + DYTable_d[ direction ],
-        r0.z + DZTable_d[ direction ]
-    ) );
+    dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
+    dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
+                                        r0.y + DYTable_d[ direction ],
+                                        r0.z + DZTable_d[ direction ] ) ] = 1;
     /* We can't clean the temporary lattice in here, because it still is being
      * used for checks. For cleaning we need only the new positions.
      * But we can't use the applied positions, because we also need to clean
@@ -793,7 +730,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     r0.x += DXTable_d[ direction ];
     r0.y += DYTable_d[ direction ];
     r0.z += DZTable_d[ direction ];
-    bitpackedUnset( dpLatticeTmp, linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) );
+    dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
     if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
         ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
   }
@@ -1183,11 +1120,17 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
     for ( uint32_t t = 0; t < nAllMonomers; ++t )
     {
-        bitpackedSet( mLatticeOut->host, linearizeBoxVectorIndex(
-            mPolymerSystem[ 4*t+0 ],
-            mPolymerSystem[ 4*t+1 ],
-            mPolymerSystem[ 4*t+2 ]
-        ) );
+        #ifdef USEZCURVE
+            uint32_t xk = mPolymerSystem[ 4*t+0 ] & mBoxXM1;
+            uint32_t yk = mPolymerSystem[ 4*t+1 ] & mBoxYM1;
+            uint32_t zk = mPolymerSystem[ 4*t+2 ] & mBoxZM1;
+            uint32_t inter3 = interleave3( xk/2 , yk/2, zk/2 );
+            mLatticeOut_host[ ( ( mPolymerSystem[ 4*t+3 ] & 1 ) << 23 ) + inter3 ] = 1;
+        #else
+        mLatticeOut->host[ linearizeBoxVectorIndex( mPolymerSystem[ 4*t+0 ],
+                                                    mPolymerSystem[ 4*t+1 ],
+                                                    mPolymerSystem[ 4*t+2 ] ) ] = 1;
+        #endif
     }
     mLatticeOut->pushAsync();
 
@@ -1420,7 +1363,7 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
             << mBoxX * mBoxY * mBoxZ << "\n";
             throw std::runtime_error( msg.str() );
         }
-        bitpackedSet( mLattice, j );
+        mLattice[ j ] = 1;
     }
 }
 
@@ -1474,14 +1417,14 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
          *    +---+---+'''
          * @endverbatim
          */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x  , y  , z   ) ); /* 0 */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x+1, y  , z   ) ); /* 1 */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x  , y+1, z   ) ); /* 2 */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x+1, y+1, z   ) ); /* 3 */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x  , y  , z+1 ) ); /* 4 */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x+1, y  , z+1 ) ); /* 5 */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x  , y+1, z+1 ) ); /* 6 */
-        bitpackedSet( mLattice, linearizeBoxVectorIndex( x+1, y+1, z+1 ) ); /* 7 */
+        mLattice[ linearizeBoxVectorIndex( x  , y  , z   ) ] = 1; /* 0 */
+        mLattice[ linearizeBoxVectorIndex( x+1, y  , z   ) ] = 1; /* 1 */
+        mLattice[ linearizeBoxVectorIndex( x  , y+1, z   ) ] = 1; /* 2 */
+        mLattice[ linearizeBoxVectorIndex( x+1, y+1, z   ) ] = 1; /* 3 */
+        mLattice[ linearizeBoxVectorIndex( x  , y  , z+1 ) ] = 1; /* 4 */
+        mLattice[ linearizeBoxVectorIndex( x+1, y  , z+1 ) ] = 1; /* 5 */
+        mLattice[ linearizeBoxVectorIndex( x  , y+1, z+1 ) ] = 1; /* 6 */
+        mLattice[ linearizeBoxVectorIndex( x+1, y+1, z+1 ) ] = 1; /* 7 */
     }
     /* check total occupied cells inside lattice to ensure that the above
      * transfer went without problems. Note that the number will be smaller
