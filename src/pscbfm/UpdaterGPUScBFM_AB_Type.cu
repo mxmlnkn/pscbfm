@@ -38,9 +38,19 @@ __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbid
  *   DZTable_d = { 0,0,0,0,-1,1 }
  * I.e. a table of three random directional 3D vectors \vec{dr} = (dx,dy,dz)
  */
-__device__ __constant__ intCUDA DXTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-__device__ __constant__ intCUDA DYTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-__device__ __constant__ intCUDA DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DXTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DYTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+/**
+ * If intCUDA is different from uint32_t, then this second table prevents
+ * expensive type conversions, but both tables are still needed, the
+ * uint32_t version, because the calculation of the linear index will result
+ * in uint32_t anyway and the intCUDA version for solely updating the
+ * position information
+ */
+__device__ __constant__ intCUDA DXTableIntCUDA_d[6];
+__device__ __constant__ intCUDA DYTableIntCUDA_d[6];
+__device__ __constant__ intCUDA DZTableIntCUDA_d[6];
 
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
@@ -386,17 +396,17 @@ __device__ inline bool checkFront
     #if defined( USE_ZCURVE_FOR_LATTICE )
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] = ( x0 + uint32_t(2)*dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( y0 + uint32_t(2)*dy ) & dcBoxYM1; break;
-            case 2: is[7] = ( z0 + uint32_t(2)*dz ) & dcBoxZM1; break;
+            case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
         }
         is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
     #else
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] =   ( x0 + uint32_t(2)*dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( ( y0 + uint32_t(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
-            case 2: is[7] = ( ( z0 + uint32_t(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+            case 0: is[7] =   ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
         }
     #endif
     switch ( axis >> intCUDA(1) )
@@ -538,6 +548,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
   {
     auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+    //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // not faster nor slower
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
         rn = hash( hash( iMonomer ) ^ rSeed );
@@ -553,9 +564,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
     * if the box is not periodic, if not, then don't move the particle */
-    if ( intCUDA(0) <= r0.x + dx && r0.x + dx < dcBoxXM1 &&
-         intCUDA(0) <= r0.y + dy && r0.y + dy < dcBoxYM1 &&
-         intCUDA(0) <= r0.z + dz && r0.z + dz < dcBoxZM1    )
+    if ( uint32_t(0) <= r0.x + dx && r0.x + dx < dcBoxXM1 &&
+         uint32_t(0) <= r0.y + dy && r0.y + dy < dcBoxYM1 &&
+         uint32_t(0) <= r0.z + dz && r0.z + dz < dcBoxZM1    )
     {
 #endif
         /* check whether the new position would result in invalid bonds
@@ -621,9 +632,9 @@ __global__ void kernelCountFilteredCheck
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
     * if the box is not periodic, if not, then don't move the particle */
-    if ( ! ( intCUDA(0) <= x0 + dx && x0 + dx < dcBoxXM1 &&
-             intCUDA(0) <= y0 + dy && y0 + dy < dcBoxYM1 &&
-             intCUDA(0) <= z0 + dz && z0 + dz < dcBoxZM1 ) )
+    if ( ! ( uint32_t(0) <= x0 + dx && x0 + dx < dcBoxXM1 &&
+             uint32_t(0) <= y0 + dy && y0 + dy < dcBoxYM1 &&
+             uint32_t(0) <= z0 + dz && z0 + dz < dcBoxZM1 ) )
     {
         atomicAdd( dpFiltered+0, size_t(1) );
     }
@@ -674,7 +685,8 @@ __global__ void kernelSimulationScBFMPerformSpecies
     if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
         continue;
 
-    auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+    //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // slower
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
         continue;
@@ -748,9 +760,9 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     auto r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
     auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
 
-    r0.x += DXTable_d[ direction ];
-    r0.y += DYTable_d[ direction ];
-    r0.z += DZTable_d[ direction ];
+    r0.x += DXTableIntCUDA_d[ direction ];
+    r0.y += DYTableIntCUDA_d[ direction ];
+    r0.z += DZTableIntCUDA_d[ direction ];
     dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
     if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
         ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
@@ -875,12 +887,18 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     free( tmpForbiddenBonds );
 
     /* create a table mapping the random int to directions whereto move the monomers */
-    intCUDA tmp_DXTable[6] = { -1,1,  0,0,  0,0 };
-    intCUDA tmp_DYTable[6] = {  0,0, -1,1,  0,0 };
-    intCUDA tmp_DZTable[6] = {  0,0,  0,0, -1,1 };
-    CUDA_ERROR( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( intCUDA ) * 6 ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( intCUDA ) * 6 ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( intCUDA ) * 6 ) );
+    uint32_t tmp_DXTable[6] = { -1,1,  0,0,  0,0 };
+    uint32_t tmp_DYTable[6] = {  0,0, -1,1,  0,0 };
+    uint32_t tmp_DZTable[6] = {  0,0,  0,0, -1,1 };
+    CUDA_ERROR( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( tmp_DXTable ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( tmp_DXTable ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( tmp_DXTable ) ) );
+    intCUDA tmp_DXTableIntCUDA[6] = { -1,1,  0,0,  0,0 };
+    intCUDA tmp_DYTableIntCUDA[6] = {  0,0, -1,1,  0,0 };
+    intCUDA tmp_DZTableIntCUDA[6] = {  0,0,  0,0, -1,1 };
+    CUDA_ERROR( cudaMemcpyToSymbol( DXTableIntCUDA_d, tmp_DXTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DYTableIntCUDA_d, tmp_DYTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DZTableIntCUDA_d, tmp_DZTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
 
     /*************************** start of grouping ***************************/
 
