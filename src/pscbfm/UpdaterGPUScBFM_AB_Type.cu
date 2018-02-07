@@ -260,9 +260,9 @@ __device__ inline uint32_t linearizeBoxVectorIndex
 __device__ inline bool checkFront
 (
     cudaTextureObject_t const & texLattice,
-    intCUDA             const & x0        ,
-    intCUDA             const & y0        ,
-    intCUDA             const & z0        ,
+    uint32_t            const & x0        ,
+    uint32_t            const & y0        ,
+    uint32_t            const & z0        ,
     intCUDA             const & axis
 )
 {
@@ -356,25 +356,25 @@ __device__ inline bool checkFront
     }
 #else
     #if defined( USE_ZCURVE_FOR_LATTICE )
-        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0              ) & dcBoxXM1 );
-        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + intCUDA(1) ) & dcBoxXM1 );
-        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - intCUDA(1) ) & dcBoxXM1 );
-        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0              ) & dcBoxYM1 ) << 1;
-        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + intCUDA(1) ) & dcBoxYM1 ) << 1;
-        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - intCUDA(1) ) & dcBoxYM1 ) << 1;
-        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0              ) & dcBoxZM1 ) << 2;
-        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + intCUDA(1) ) & dcBoxZM1 ) << 2;
-        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - intCUDA(1) ) & dcBoxZM1 ) << 2;
+        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
+        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
+        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
+        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
+        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
+        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
+        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
     #else
-        auto const x0Abs  =   ( x0              ) & dcBoxXM1;
-        auto const x0PDX  =   ( x0 + intCUDA(1) ) & dcBoxXM1;
-        auto const x0MDX  =   ( x0 - intCUDA(1) ) & dcBoxXM1;
-        auto const y0Abs  = ( ( y0              ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const y0PDY  = ( ( y0 + intCUDA(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const y0MDY  = ( ( y0 - intCUDA(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const z0Abs  = ( ( z0              ) & dcBoxZM1 ) << dcBoxXYLog2;
-        auto const z0PDZ  = ( ( z0 + intCUDA(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
-        auto const z0MDZ  = ( ( z0 - intCUDA(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const x0Abs  =   ( x0               ) & dcBoxXM1;
+        auto const x0PDX  =   ( x0 + uint32_t(1) ) & dcBoxXM1;
+        auto const x0MDX  =   ( x0 - uint32_t(1) ) & dcBoxXM1;
+        auto const y0Abs  = ( ( y0               ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0PDY  = ( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0MDY  = ( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const z0Abs  = ( ( z0               ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0PDZ  = ( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
     #endif
 
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
@@ -386,17 +386,17 @@ __device__ inline bool checkFront
     #if defined( USE_ZCURVE_FOR_LATTICE )
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] = ( x0 + intCUDA(2)*dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( y0 + intCUDA(2)*dy ) & dcBoxYM1; break;
-            case 2: is[7] = ( z0 + intCUDA(2)*dz ) & dcBoxZM1; break;
+            case 0: is[7] = ( x0 + uint32_t(2)*dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + uint32_t(2)*dy ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + uint32_t(2)*dz ) & dcBoxZM1; break;
         }
         is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
     #else
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] =   ( x0 + intCUDA(2)*dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
-            case 2: is[7] = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+            case 0: is[7] =   ( x0 + uint32_t(2)*dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + uint32_t(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + uint32_t(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
         }
     #endif
     switch ( axis >> intCUDA(1) )
@@ -542,7 +542,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
         rn = hash( hash( iMonomer ) ^ rSeed );
 
-    T_Flags const direction = rn % 6; rn /= 6;
+    T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
     T_Flags properties = 0;
 
      /* select random direction. Do this with bitmasking instead of lookup ??? */
@@ -553,9 +553,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
     * if the box is not periodic, if not, then don't move the particle */
-    if ( 0 <= r0.x + dx && r0.x + dx < dcBoxXM1 &&
-         0 <= r0.y + dy && r0.y + dy < dcBoxYM1 &&
-         0 <= r0.z + dz && r0.z + dz < dcBoxZM1    )
+    if ( intCUDA(0) <= r0.x + dx && r0.x + dx < dcBoxXM1 &&
+         intCUDA(0) <= r0.y + dy && r0.y + dy < dcBoxYM1 &&
+         intCUDA(0) <= r0.z + dz && r0.z + dz < dcBoxZM1    )
     {
 #endif
         /* check whether the new position would result in invalid bonds
@@ -621,9 +621,9 @@ __global__ void kernelCountFilteredCheck
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
     * if the box is not periodic, if not, then don't move the particle */
-    if ( ! ( 0 <= x0 + dx && x0 + dx < dcBoxXM1 &&
-             0 <= y0 + dy && y0 + dy < dcBoxYM1 &&
-             0 <= z0 + dz && z0 + dz < dcBoxZM1 ) )
+    if ( ! ( intCUDA(0) <= x0 + dx && x0 + dx < dcBoxXM1 &&
+             intCUDA(0) <= y0 + dy && y0 + dy < dcBoxYM1 &&
+             intCUDA(0) <= z0 + dz && z0 + dz < dcBoxZM1 ) )
     {
         atomicAdd( dpFiltered+0, size_t(1) );
     }
