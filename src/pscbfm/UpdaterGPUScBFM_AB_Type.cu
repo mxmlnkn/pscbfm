@@ -156,6 +156,7 @@ __device__ __host__ inline T diluteBits( T const & rx )
  * derive from :(
  * Might be needed to compare performance to the template version.
  *  => is slower by 1%
+ * Why is it using ^ instead of | ??? !!!
  */
 /*
 __device__ uint32_t part1by2_d( uint32_t n )
@@ -265,8 +266,8 @@ __device__ inline bool checkFront
     intCUDA             const & axis
 )
 {
-    bool isOccupied = false;
 #if 0
+    bool isOccupied = false;
     #define TMP_FETCH( x,y,z ) \
         tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
     auto const shift  = intCUDA(4) * ( axis & intCUDA(1) ) - intCUDA(2);
@@ -292,6 +293,7 @@ __device__ inline bool checkFront
     r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 8 */
     #undef TMP_FETCH
 #elif 0 // defined( NOMAGIC )
+    bool isOccupied = false;
     intCUDA const shift = 4*(axis & 1)-2;
     switch ( axis >> 1 )
     {
@@ -378,6 +380,9 @@ __device__ inline bool checkFront
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
     auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
+
+    uint32_t is[9];
+
     switch ( axis >> intCUDA(1) )
     {
         case 0: //-+x
@@ -387,16 +392,15 @@ __device__ inline bool checkFront
             #else
                 auto const x1 = ( x0 + intCUDA(2)*dx ) & dcBoxXM1;
             #endif
-            isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0MDY | z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0Abs | z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x1 | y0PDY | z0PDZ );
+            is[0] = x1 | y0MDY | z0Abs;
+            is[1] = x1 | y0Abs | z0Abs;
+            is[2] = x1 | y0PDY | z0Abs;
+            is[3] = x1 | y0MDY | z0MDZ;
+            is[4] = x1 | y0Abs | z0MDZ;
+            is[5] = x1 | y0PDY | z0MDZ;
+            is[6] = x1 | y0MDY | z0PDZ;
+            is[7] = x1 | y0Abs | z0PDZ;
+            is[8] = x1 | y0PDY | z0PDZ;
             break;
         }
         case 1: //-+y
@@ -406,16 +410,15 @@ __device__ inline bool checkFront
             #else
                 auto const y1 = ( ( y0 + intCUDA(2)*dy ) & dcBoxYM1 ) << dcBoxXLog2;
             #endif
-            isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0MDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0Abs ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX | y1 | z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs | y1 | z0PDZ ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX | y1 | z0PDZ );
+            is[0] = x0MDX | y1 | z0MDZ;
+            is[1] = x0Abs | y1 | z0MDZ;
+            is[2] = x0PDX | y1 | z0MDZ;
+            is[3] = x0MDX | y1 | z0Abs;
+            is[4] = x0Abs | y1 | z0Abs;
+            is[5] = x0PDX | y1 | z0Abs;
+            is[6] = x0MDX | y1 | z0PDZ;
+            is[7] = x0Abs | y1 | z0PDZ;
+            is[8] = x0PDX | y1 | z0PDZ;
             break;
         }
         case 2: //-+z
@@ -425,19 +428,27 @@ __device__ inline bool checkFront
             #else
                 auto const z1 = ( ( z0 + intCUDA(2)*dz ) & dcBoxZM1 ) << dcBoxXYLog2;
             #endif
-            isOccupied =
-                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0MDY | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0MDY | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0MDY | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0Abs | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0Abs | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0Abs | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0MDX | y0PDY | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0Abs | y0PDY | z1 ) |
-                tex1Dfetch< uint8_t >( texLattice, x0PDX | y0PDY | z1 );
+            is[0] = x0MDX | y0MDY | z1;
+            is[1] = x0Abs | y0MDY | z1;
+            is[2] = x0PDX | y0MDY | z1;
+            is[3] = x0MDX | y0Abs | z1;
+            is[4] = x0Abs | y0Abs | z1;
+            is[5] = x0PDX | y0Abs | z1;
+            is[6] = x0MDX | y0PDY | z1;
+            is[7] = x0Abs | y0PDY | z1;
+            is[8] = x0PDX | y0PDY | z1;
             break;
         }
     }
+    bool const isOccupied = tex1Dfetch< uint8_t >( texLattice, is[0] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[1] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[2] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[3] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[4] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[5] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[6] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[7] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[8] );
 #endif
     return isOccupied;
 }
