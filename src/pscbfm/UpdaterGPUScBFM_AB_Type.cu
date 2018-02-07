@@ -547,9 +547,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
   int iGrid = 0;
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
   {
-    auto const r0Raw = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+    auto const r0 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
     /* upcast int3 to int4 in preparation to use PTX SIMD instructiosn */
-    uint4 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z, 0 }; // not faster nor slower
+    //int4 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z, 0 }; // not faster nor slower
     //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
     if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
         rn = hash( hash( iMonomer ) ^ rSeed );
@@ -558,16 +558,19 @@ __global__ void kernelSimulationScBFMCheckSpecies
     T_Flags properties = 0;
 
      /* select random direction. Do this with bitmasking instead of lookup ??? */
-    auto const dx = DXTable_d[ direction ];
-    auto const dy = DYTable_d[ direction ];
-    auto const dz = DZTable_d[ direction ];
+    /* int4 const dr = { DXTable_d[ direction ],
+                      DYTable_d[ direction ],
+                      DZTable_d[ direction ], 0 }; */
+    int3 const r1 = { r0.x + DXTable_d[ direction ],
+                      r0.y + DYTable_d[ direction ],
+                      r0.z + DZTable_d[ direction ] };
 
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
     * if the box is not periodic, if not, then don't move the particle */
-    if ( uint32_t(0) <= r0.x + dx && r0.x + dx < dcBoxXM1 &&
-         uint32_t(0) <= r0.y + dy && r0.y + dy < dcBoxYM1 &&
-         uint32_t(0) <= r0.z + dz && r0.z + dz < dcBoxZM1    )
+    if ( uint32_t(0) <= r1.x && r1.x < dcBoxXM1 &&
+         uint32_t(0) <= r1.y && r1.y < dcBoxYM1 &&
+         uint32_t(0) <= r1.z && r1.z < dcBoxZM1    )
     {
 #endif
         /* check whether the new position would result in invalid bonds
@@ -578,7 +581,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
         {
             auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
             auto const data2 = ( (intCUDAVec< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
-            if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r0.x - dx, data2.y - r0.y - dy, data2.z - r0.z - dz ) ] )
+            if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r1.x, data2.y - r1.y, data2.z - r1.z ) ] )
             {
                 forbiddenBond = true;
                 break;
@@ -591,7 +594,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
              * texture used above. Won't this result in read-after-write race-conditions?
              * Then again the written / changed bits are never used in the above code ... */
             properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
-            dpLatticeTmp[ linearizeBoxVectorIndex( r0.x + dx, r0.y + dy, r0.z + dz ) ] = 1;
+            dpLatticeTmp[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
         }
 #ifdef NONPERIODICITY
     }
