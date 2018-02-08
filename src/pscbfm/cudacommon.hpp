@@ -90,6 +90,10 @@ TMP_CUDAVECS( int64_t, long  )
  * be visible ... I'm confused
  * @see http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#cuda-compilation-trajectory
  * @see http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#using-separate-compilation-in-cuda
+ * @see https://github.com/pathscale/nvidia_sdk_samples/blob/master/vectorAdd/build/cuda/5.0.35-13978363_x64/include/sm_30_intrinsics.h
+ *   => they use #if ! defined( __CUDA_ARCH__ ) || __CUDA_ARCH__ >= 300
+ *      for body-code it shouldn't matter, but for function headers to be
+ *      seen this is the working approach
  */
 #if 0
 
@@ -271,7 +275,7 @@ T warpReduceSum( T x )
 #if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
 #if 0
     #pragma unroll
-    for ( int delta = warpSize >> 1; delta > 0; delta << 1 )
+    for ( int delta = warpSize >> 1; delta > 0; delta <<= 1 )
         x += __shfl_down( x, delta );
     return x;
 #else
@@ -292,37 +296,104 @@ T warpReduceSum( T x )
  * of all elements with lower threadIds, such that it can be used to
  * calculate the cumulative sums inside a kernel which filters by linear
  * thread ID.
- *
+ * It is down recursively with a divide and conquer scheme, i.e. at each
+ * step each thread only has the cumsum in as viewn in an interval of 2,4,8,...
+ * E.g. if each thread would store a 1, being denoted as a block, then
+ * the result of each thread having the corresponding cumsum, would look
+ * like a triangle and the intermediary steps would looke like the following:
  * @verbatim
- * |7|6|5|4|3|2|1|0|
- * +-+-+-+-+-+-+-+-+
- *   .'  .'  .'  .'
- * |7|6|5|4|3|2|1|0|
- * +-+-+-+-+-+-+-+-+
- *     .'      .'
- *   .'      .'
- * |7|6|5|4|3|2|1|0|
- * +-+-+-+-+-+-+-+-+
- *       .'
- *     .'
- *   .'
- * |7|6|5|4|3|2|1|0|
- * +-+-+-+-+-+-+-+-+
+ * 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+ *
+ * x x x x x x x x x x x x x x x x
+ *
+ *               |
+ *               v
+ *
+ * x x x x x x x x x x x x x x x x
+ * x   x   x   x   x   x   x   x
+ *
+ *               |
+ *               v
+ *
+ * ,-+-+-. ,-+-+-. ,-+-+-.
+ * v v v | v v v | v v v |
+ *       |       |       |
+ * x x x x x x x x x x x x x x x x
+ * x x x   x x x   x x x   x x x
+ * x x     x x     x x     x x
+ * x       x       x       x
+ *
+ *               |
+ *               v
+ *
+ * ,-+-+-+-+-+-+-+-.
+ * v v v v v v v v |
+ *                 |
+ * x x x x x x x x x x x x x x x x
+ * x x x x x x x   x x x x x x x
+ * x x x x x x     x x x x x x
+ * x x x x x       x x x x x
+ * x x x x         x x x x
+ * x x x           x x x
+ * x x             x x
+ * x               x
+ * @endverbatim
+ * Would be a bitch to do with __shfl_down, instead use __shfl_idx
+ * Basically we just need to mask out some bits of the src laneId,
+ * to get the target! The higher bits are basically indexing the
+ * subintervals and the lower bits those inside the subintervals
+ *
  * @see https://devblogs.nvidia.com/cuda-pro-tip-optimized-filtering-warp-aggregated-atomics/
+ * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/#warp-shuffle-functions
+ *   -> since CUDA 9 they got renamed to have a suffix '_sync'
+ * Actually we could delegate some of the bitmasking to CUDA by using the
+ * width parameter!
  */
 template< typename T > __device__ inline
 T warpReduceCumSum( T x )
 {
 #if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
     /* todo */
-    x += __shfl_down( x,  1 );
-    x += __shfl_down( x,  2 );
-    x += __shfl_down( x,  4 );
-    x += __shfl_down( x,  8 );
-    x += __shfl_down( x, 16 );
+    assert( warpSize == 32 );
+    /* first calculate y_i = \sum_{k=0}^{2^i}  x_i */
+    /* & (32-1) -> laneID, not sure if faster than % warpSize */;
+    auto const laneId = threadIdx.x & 0x1F;
+#if 0
+    for ( int width = 1; width < warpSize; width <<= 1 )
+    {
+        auto const srcId = ( laneId & ~( width-1 ) ) - 1;
+        auto const dx = __shfl( x, srcId );
+        if ( laneId % ( width * 2 ) >= width )
+            x += dx;
+    }
+#else
+    T dx;
+    assert( warpSize == 32 );
+    /**
+     * using that l % 2^k is same as l &~( 2^k-1 ) and that
+     * x & 0b0001111 >= 0b0001000 would be the same as checking
+     * whether bit 4 was set, i.e. x & 0b0001000 != 0
+     * lastly use that __shfl( x, laneId & 0b111100 - 1 )
+     * would be the same as as: __shfl( x, id = 0b11, width = 0b1000 )
+     */
+    #if 0
+        dx = __shfl( x, ( laneId & 0xFFFF ) - 1 ); if ( laneId %  2 >=  1 ) x += dx;
+        dx = __shfl( x, ( laneId & 0xFFFE ) - 1 ); if ( laneId %  4 >=  2 ) x += dx;
+        dx = __shfl( x, ( laneId & 0xFFFC ) - 1 ); if ( laneId %  8 >=  4 ) x += dx;
+        dx = __shfl( x, ( laneId & 0xFFF8 ) - 1 ); if ( laneId % 16 >=  8 ) x += dx;
+        dx = __shfl( x, ( laneId & 0xFFF0 ) - 1 ); if ( laneId % 32 >= 16 ) x += dx;
+    #else
+        dx = __shfl( x,  0,  2 ); if ( laneId &  1 ) x += dx;
+        dx = __shfl( x,  1,  4 ); if ( laneId &  2 ) x += dx;
+        dx = __shfl( x,  3,  8 ); if ( laneId &  4 ) x += dx;
+        dx = __shfl( x,  7, 16 ); if ( laneId &  8 ) x += dx;
+        dx = __shfl( x, 15, 32 ); if ( laneId & 16 ) x += dx;
+    #endif
+#endif
 #else
     assert( false && "Need __shfl_down and therefore Kepler (compute capability 3.0) or higher" );
 #endif
+    return x;
 }
 
 /**
@@ -333,14 +404,56 @@ __device__ inline int warpReduceCumSumPredicate( bool const x )
 {
 #if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300 && __CUDA_ARCH__ < 1000
     /* __ballot deprecated since CUDA 9 sets laneId-th bit set, i.e. lower are
-     * to the right */
-    auto const laneId = threadIdx.x & 0x1F /* 32-1 -> laneID */;
-    auto const maskRight = ( 2 << laneId ) - 1;
-    return __popc( __ballot(x) & ~maskRight );
+     * to the "right" i.e. wil result in lower numbers */
+    assert( warpSize == 32 );
+    auto const laneId = threadIdx.x & 0x1F; /* 32-1 -> laneID, not sure if faster than % warpSize */;
+    auto const mask = ( 2u << laneId ) - 1u; // will even wark for laneId 31, reslting in 0-1=-1
+    return __popc( __ballot(x) & mask );
 #else
-    assert( false && "Needs __ballot and __popc" );
+    assert( false && "Needs __ballot and __popc and therefore compute capability 3.0 or higher" );
 #endif
 }
+
+/**
+ * return type is int, because that's the return type for popc
+ * and therefore by extension the one for __shfl, therefore typecasts
+ * would be avoidable if you need something else
+ *
+ * Giving a __shared__ memory pointer like this only works for
+ * __CUDA_ARCH__ >= 200
+ */
+__device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBuffer )
+{
+    assert( threadIdx.y == 0 );
+    assert( threadIdx.z == 0 );
+    assert( blockDim.x <= warpSize * warpSize );
+    /* calculate cum sums per warp */
+    auto cumsum = warpReduceCumSumPredicate( x );
+    /* write all largest cumSums per warp, i.e. highest threadIdx / laneId
+     * into __shared__ buffer. The highest thread doesn't need to store
+     * its value, because noone needs to add it, this is useful, because
+     * that allows calling this with some higher threadIds being filtered out */
+    auto const iSubarray = threadIdx.x / warpSize;
+    if ( threadIdx.x % warpSize == warpSize - 1 )
+        smBuffer[ iSubarray ] = cumsum;
+    /* the first warp now reduces these intermediary sums to another cumsum
+     * and writes it back. This is enough assuming that warpSize * warpSize <=
+     * maxThreadsPerBlock, which is the case normally, i.e. 32^2 <= 1024 */
+    if ( threadIdx.x < warpSize )
+    {
+        __syncthreads();
+        auto const globalCumSum = warpReduceCumSum( smBuffer[ threadIdx.x ] );
+        __syncthreads();
+        smBuffer[ threadIdx.x ] = globalCumSum;
+    }
+    /* now we need to apply these cumsums which kinda act like global offsets
+     * to all our "small" cumsum variations */
+    __syncthreads();
+    if ( iSubarray > 0 )
+        cumsum += smBuffer[ iSubarray-1 ];
+    return cumsum;
+}
+
 #endif // __CUDACC__
 
 
