@@ -269,15 +269,14 @@ __device__ inline ulong4 operator+( ulong4 const & x, ulong4 const & y ) {
  * @endverbatim
  * @see https://devblogs.nvidia.com/faster-parallel-reductions-kepler/
  */
+#if ! defined( __CUDA_ARCH__ ) || __CUDA_ARCH__ >= 300
 template< typename T > __inline__ __device__
 T warpReduceSum( T x )
 {
-#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
 #if 0
     #pragma unroll
     for ( int delta = warpSize >> 1; delta > 0; delta <<= 1 )
         x += __shfl_down( x, delta );
-    return x;
 #else
     assert( warpSize == 32 );
     x += __shfl_down( x, 16 );
@@ -286,10 +285,9 @@ T warpReduceSum( T x )
     x += __shfl_down( x,  2 );
     x += __shfl_down( x,  1 );
 #endif
-#else
-    assert( false && "Need __shfl_down and therefore Kepler (compute capability 3.0) or higher" );
-#endif
+    return x;
 }
+#endif
 
 /**
  * Similar to warpReduceSum, but actually returns the cumulative sum
@@ -400,19 +398,17 @@ T warpReduceCumSum( T x )
  * same as warpReduceCumSum, but only can input bool, not a 32-bit number
  * __popc returns int @see http://docs.nvidia.com/cuda/cuda-math-api/group__CUDA__MATH__INTRINSIC__INT.html#group__CUDA__MATH__INTRINSIC__INT_1g43c9c7d2b9ebf202ff1ef5769989be46
  */
+#if ! defined( __CUDA_ARCH__ ) || ( __CUDA_ARCH__ >= 300 && __CUDA_ARCH__ < 1000 )
 __device__ inline int warpReduceCumSumPredicate( bool const x )
 {
-#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300 && __CUDA_ARCH__ < 1000
     /* __ballot deprecated since CUDA 9 sets laneId-th bit set, i.e. lower are
      * to the "right" i.e. wil result in lower numbers */
     assert( warpSize == 32 );
     auto const laneId = threadIdx.x & 0x1F; /* 32-1 -> laneID, not sure if faster than % warpSize */;
     auto const mask = ( 2u << laneId ) - 1u; // will even wark for laneId 31, reslting in 0-1=-1
     return __popc( __ballot(x) & mask );
-#else
-    assert( false && "Needs __ballot and __popc and therefore compute capability 3.0 or higher" );
-#endif
 }
+#endif
 
 /**
  * return type is int, because that's the return type for popc
@@ -451,7 +447,66 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
     __syncthreads();
     if ( iSubarray > 0 )
         cumsum += smBuffer[ iSubarray-1 ];
+    /* wait until everyone read before giving control back which could
+     * possibly mess up the buffer! */
+    __syncthreads();
     return cumsum;
+}
+
+/**
+ * same as blockReduceCumSumPredicate, just replace cumsum with sum and
+ * watch out to adjust the write to smBuffer
+ */
+__device__ inline int blockReduceSumPredicate( bool const x, int * const smBuffer )
+{
+    assert( threadIdx.y == 0 );
+    assert( threadIdx.z == 0 );
+    assert( blockDim.x <= warpSize * warpSize );
+    auto sum = __popc( __ballot(x) );
+    if ( threadIdx.x < warpSize )
+        smBuffer[ threadIdx.x ] = 0;
+    __syncthreads();
+    auto const iSubarray = threadIdx.x / warpSize;
+    if ( threadIdx.x % warpSize == 0 )
+        smBuffer[ iSubarray ] = sum;
+    if ( threadIdx.x < warpSize )
+    {
+        __syncthreads();
+        auto const globalSum = warpReduceSum( smBuffer[ threadIdx.x ] );
+        __syncthreads();
+        smBuffer[ threadIdx.x ] = globalSum;
+    }
+    __syncthreads();
+    if ( iSubarray > 0 )
+        sum += smBuffer[ iSubarray-1 ];
+    __syncthreads();
+    return sum;
+}
+
+__device__ inline int blockReduceSum( int const x, int * const smBuffer )
+{
+    assert( threadIdx.y == 0 );
+    assert( threadIdx.z == 0 );
+    assert( blockDim.x <= warpSize * warpSize );
+    auto sum = warpReduceSum( x );
+    if ( threadIdx.x < warpSize )
+        smBuffer[ threadIdx.x ] = 0;
+    __syncthreads();
+    auto const iSubarray = threadIdx.x / warpSize;
+    if ( threadIdx.x % warpSize == 0 )
+        smBuffer[ iSubarray ] = sum;
+    if ( threadIdx.x < warpSize )
+    {
+        __syncthreads();
+        auto const globalSum = warpReduceSum( smBuffer[ threadIdx.x ] );
+        __syncthreads();
+        smBuffer[ threadIdx.x ] = globalSum;
+    }
+    __syncthreads();
+    if ( iSubarray > 0 )
+        sum += smBuffer[ iSubarray-1 ];
+    __syncthreads();
+    return sum;
 }
 
 #endif // __CUDACC__
