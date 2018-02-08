@@ -544,6 +544,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     intCUDA           * const __restrict__ dpPolymerSystemUnfiltered
 )
 {
+    /* needwed for stream compaction reduction */
+    __shared__ int smBuffer[32];
+
   uint32_t rn;
   int iGrid = 0;
   for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
@@ -601,8 +604,13 @@ __global__ void kernelSimulationScBFMCheckSpecies
     }
 #endif
     dpPolymerFlags[ iOffset + iMonomer ] = properties;
-    auto const offset = warpReduceSum( properties );
-    dpPolymerSystemUnfiltered[ offset ] = 1;
+    /* For stream compaction it will amke more sense again to put the direction
+     * of movement into a compacted array, instead of inside dpPolymerFlags */
+    //dpPolymerSystemUnfiltered[ iMonomer ] = properties & 1;
+    //dpPolymerSystemUnfiltered[ iMonomer ] = warpReduceCumSumPredicate( properties & 1 );
+    //dpPolymerSystemUnfiltered[ iMonomer ] = blockReduceCumSumPredicate( properties & 1, smBuffer );
+    blockReduceCumSumPredicate( properties & 1, smBuffer );
+    dpPolymerSystemUnfiltered[ iMonomer ] = iMonomer < 32 ? smBuffer[ iMonomer ] : 0;
   }
 }
 
@@ -1599,6 +1607,15 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mLatticeOut->texture,
                 compactedData.gpu
             );
+
+            if ( iStep <= 2 )
+            {
+                compactedData.pop();
+                std::cout << "Prefixes calculated inside first block at step " << iStep << ":";
+                for ( auto i = 0u; i < mnThreads; ++i )
+                    std::cout << ( i % 32 /* warpSize */ == 0 ? "\n" : " " ) << compactedData.host[i];
+                std::cout << std::endl;
+            }
 
             if ( mLog.isActive( "Stats" ) )
             {
