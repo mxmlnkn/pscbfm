@@ -540,7 +540,8 @@ __global__ void kernelSimulationScBFMCheckSpecies
     uint8_t     const * const __restrict__ dpNeighborsSizes       ,
     uint32_t            const              nMonomers              ,
     uint32_t            const              rSeed                  ,
-    cudaTextureObject_t const              texLatticeRefOut
+    cudaTextureObject_t const              texLatticeRefOut       ,
+    intCUDA           * const __restrict__ dpPolymerSystemUnfiltered
 )
 {
   uint32_t rn;
@@ -561,9 +562,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     /* int4 const dr = { DXTable_d[ direction ],
                       DYTable_d[ direction ],
                       DZTable_d[ direction ], 0 }; */
-    int3 const r1 = { r0.x + DXTable_d[ direction ],
-                      r0.y + DYTable_d[ direction ],
-                      r0.z + DZTable_d[ direction ] };
+    uint3 const r1 = { r0.x + DXTable_d[ direction ],
+                       r0.y + DYTable_d[ direction ],
+                       r0.z + DZTable_d[ direction ] };
 
 #ifdef NONPERIODICITY
    /* check whether the new location of the particle would be inside the box
@@ -600,6 +601,8 @@ __global__ void kernelSimulationScBFMCheckSpecies
     }
 #endif
     dpPolymerFlags[ iOffset + iMonomer ] = properties;
+    auto const offset = warpReduceSum( properties );
+    dpPolymerSystemUnfiltered[ offset ] = 1;
   }
 }
 
@@ -1563,6 +1566,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         cudaEventRecord( tGpu0 );
     }
 
+    MirroredVector< intCUDA > compactedData( nAllMonomers );
+
     /* run simulation */
     for ( int32_t iStep = 1; iStep <= nMonteCarloSteps; ++iStep )
     {
@@ -1591,7 +1596,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
                 mNeighborsSortedSizes->gpu,
                 mnElementsInGroup[ iSpecies ], seed,
-                mLatticeOut->texture
+                mLatticeOut->texture,
+                compactedData.gpu
             );
 
             if ( mLog.isActive( "Stats" ) )

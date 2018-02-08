@@ -238,6 +238,112 @@ __device__ inline ulong4 operator+( ulong4 const & x, ulong4 const & y ) {
  */
 
 
+#ifdef __CUDACC__
+/**
+ * Reduces a value inside each warp who calls this function recursively
+ * and the thread with lane ID 0 will have the result. Actually all threads
+ * in the warps hould have the same result, as there is no predicate being
+ * used for the addition and even though the shuffling rotates, it is
+ * symmetrical to shifts, therefore it must have the same result for each
+ * thread.
+ * @verbatim
+ * |0|1|2|3|4|5|6|7|
+ * +-+-+-+-+-+-+-+-+
+ *         .'.'.'.'  delta = 4, i.e. 0 gets the value
+ *       .'.'.'.'    of lane 4, 1 of lane 5, ...
+ *     .'.'.'.'
+ *   .'.'.'.'
+ * |0|1|2|3|4|5|6|7|
+ * +-+-+-+-+-+-+-+-+
+ *     .'.'          delta = 2
+ *   .'.'
+ * |0|1|2|3|4|5|6|7|
+ * +-+-+-+-+-+-+-+-+
+ *   .'              delta = 1
+ * |0|1|2|3|4|5|6|7|
+ * +-+-+-+-+-+-+-+-+
+ * @endverbatim
+ * @see https://devblogs.nvidia.com/faster-parallel-reductions-kepler/
+ */
+template< typename T > __inline__ __device__
+T warpReduceSum( T x )
+{
+#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
+#if 0
+    #pragma unroll
+    for ( int delta = warpSize >> 1; delta > 0; delta << 1 )
+        x += __shfl_down( x, delta );
+    return x;
+#else
+    assert( warpSize == 32 );
+    x += __shfl_down( x, 16 );
+    x += __shfl_down( x,  8 );
+    x += __shfl_down( x,  4 );
+    x += __shfl_down( x,  2 );
+    x += __shfl_down( x,  1 );
+#endif
+#else
+    assert( false && "Need __shfl_down and therefore Kepler (compute capability 3.0) or higher" );
+#endif
+}
+
+/**
+ * Similar to warpReduceSum, but actually returns the cumulative sum
+ * of all elements with lower threadIds, such that it can be used to
+ * calculate the cumulative sums inside a kernel which filters by linear
+ * thread ID.
+ *
+ * @verbatim
+ * |7|6|5|4|3|2|1|0|
+ * +-+-+-+-+-+-+-+-+
+ *   .'  .'  .'  .'
+ * |7|6|5|4|3|2|1|0|
+ * +-+-+-+-+-+-+-+-+
+ *     .'      .'
+ *   .'      .'
+ * |7|6|5|4|3|2|1|0|
+ * +-+-+-+-+-+-+-+-+
+ *       .'
+ *     .'
+ *   .'
+ * |7|6|5|4|3|2|1|0|
+ * +-+-+-+-+-+-+-+-+
+ * @see https://devblogs.nvidia.com/cuda-pro-tip-optimized-filtering-warp-aggregated-atomics/
+ */
+template< typename T > __device__ inline
+T warpReduceCumSum( T x )
+{
+#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
+    /* todo */
+    x += __shfl_down( x,  1 );
+    x += __shfl_down( x,  2 );
+    x += __shfl_down( x,  4 );
+    x += __shfl_down( x,  8 );
+    x += __shfl_down( x, 16 );
+#else
+    assert( false && "Need __shfl_down and therefore Kepler (compute capability 3.0) or higher" );
+#endif
+}
+
+/**
+ * same as warpReduceCumSum, but only can input bool, not a 32-bit number
+ * __popc returns int @see http://docs.nvidia.com/cuda/cuda-math-api/group__CUDA__MATH__INTRINSIC__INT.html#group__CUDA__MATH__INTRINSIC__INT_1g43c9c7d2b9ebf202ff1ef5769989be46
+ */
+__device__ inline int warpReduceCumSumPredicate( bool const x )
+{
+#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300 && __CUDA_ARCH__ < 1000
+    /* __ballot deprecated since CUDA 9 sets laneId-th bit set, i.e. lower are
+     * to the right */
+    auto const laneId = threadIdx.x & 0x1F /* 32-1 -> laneID */;
+    auto const maskRight = ( 2 << laneId ) - 1;
+    return __popc( __ballot(x) & ~maskRight );
+#else
+    assert( false && "Needs __ballot and __popc" );
+#endif
+}
+#endif // __CUDACC__
+
+
 template< typename T, typename S >
 __host__ __device__
 inline T ceilDiv( T a, S b )
