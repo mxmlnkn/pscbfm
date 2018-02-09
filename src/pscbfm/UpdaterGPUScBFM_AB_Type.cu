@@ -549,7 +549,8 @@ __global__ void kernelSimulationScBFMCheckSpecies
         smnWritten = 0;
 
     auto const offsetThisBlock = blockIdx.x * nPitchCompacted;
-    dpPolymerFlags += offsetThisBlock;
+    dpCompactedPolymerSystem += offsetThisBlock * 3;
+    //dpPolymerFlags += offsetThisBlock;
     dpOriginalIds  += offsetThisBlock;
 
     uint32_t rn;
@@ -565,6 +566,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
             rn = hash( hash( iMonomer ) ^ rSeed );
 
         T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
+        T_Flags properties = 0;
 
          /* select random direction. Do this with bitmasking instead of lookup ??? */
         /* int4 const dr = { DXTable_d[ direction ],
@@ -574,6 +576,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
                            r0.y + DYTable_d[ direction ],
                            r0.z + DZTable_d[ direction ] };
 
+        bool mightMove = false;
     #ifdef NONPERIODICITY
        /* check whether the new location of the particle would be inside the box
         * if the box is not periodic, if not, then don't move the particle */
@@ -596,7 +599,6 @@ __global__ void kernelSimulationScBFMCheckSpecies
                     break;
                 }
             }
-            bool mightMove = false;
             if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
             {
                 /* everything fits so perform move on temporary lattice */
@@ -604,14 +606,18 @@ __global__ void kernelSimulationScBFMCheckSpecies
                  * texture used above. Won't this result in read-after-write race-conditions?
                  * Then again the written / changed bits are never used in the above code ... */
                 mightMove = true;
+                properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
                 dpLatticeTmp[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
             }
     #ifdef NONPERIODICITY
         }
     #endif
+        dpPolymerFlags[ iOffset + iMonomer ] = properties;
         /* not needed, because blockReduceCumSumPredicate has one */
         //__syncthreads(); // wait till smnWritten was set to 0 or updated in last loop
 
+        /* blockReduceCumSumPredicate and blockReduceSumPredicate merged to
+         * save some __syncthreads */
         int cumsum, sum;
         {
             cumsum = warpReduceCumSumPredicate( mightMove );
@@ -641,11 +647,10 @@ __global__ void kernelSimulationScBFMCheckSpecies
         auto const iToWrite = smnWritten + cumsum - 1; /* this block, but we already incremented all write arrays further above */
         if ( mightMove )
         {
-            ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ offsetThisBlock + iToWrite ] = r0;
+            ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iToWrite ] = r0;
             dpOriginalIds [ iToWrite ] = iMonomer;
-            dpPolymerFlags[ iToWrite ] = direction;
+            //dpPolymerFlags[ iToWrite ] = direction;
         }
-        /* don't need this, because blockReduceSumPredicate has a __syncthreads */
         __syncthreads();
         if ( threadIdx.x == 0 )
             smnWritten += sum;
@@ -723,13 +728,15 @@ __global__ void kernelCountFilteredCheck
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
+    intCUDA       const * const __restrict__ dpPolymerSystem         ,
+    T_Flags             * const __restrict__ dpPolymerFlags          ,
+    uint8_t             * const __restrict__ dpLattice               ,
     uint32_t              const              nTotalMonomers          ,
-    uint32_t      const * const __restrict__ dpnRemainingPerBlock    ,
-    intCUDA       const *       __restrict__ dpCompactedPolymerSystem,
-    int                   const              nPitchCompacted         ,
-    T_Flags             *       __restrict__ dpPolymerFlags          ,
     cudaTextureObject_t   const              texLatticeTmp           ,
-    uint8_t             * const __restrict__ dpLattice
+    uint32_t            * const __restrict__ dpnRemainingPerBlock    ,
+    uint32_t      const *       __restrict__ dpOriginalIds           ,
+    intCUDA       const *       __restrict__ dpCompactedPolymerSystem,
+    int                   const              nPitchCompacted
 )
 {
     auto const nMonomers = dpnRemainingPerBlock[ blockIdx.x ];
@@ -740,27 +747,32 @@ __global__ void kernelSimulationScBFMPerformSpecies
      * 32 threads instead of 128 ... well that in turn would be meh... better
      * something like 128 instead of 512?!
      */
-    if ( ! ( threadIdx.x < nMonomers ) )
+    if ( threadIdx.x >= nMonomers )
         return;
 
     auto const offsetThisBlock = blockIdx.x * nPitchCompacted;
-    dpPolymerFlags += offsetThisBlock;
+    dpOriginalIds            += offsetThisBlock;
+    dpCompactedPolymerSystem += offsetThisBlock * 3;
 
-    for ( auto iCompactedMonomer = threadIdx.x; iCompactedMonomer < nMonomers;
-          iCompactedMonomer += blockDim.x )
+    for ( auto iMonomerCompacted = threadIdx.x; iMonomerCompacted < nMonomers;
+          iMonomerCompacted += blockDim.x )
     {
-        auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ offsetThisBlock + iCompactedMonomer ];
-        auto const direction = dpPolymerFlags[ iCompactedMonomer ];
-        auto const canMove = ! checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction );
-        dpPolymerFlags[ iCompactedMonomer ] = ( direction << T_Flags(2) ) | T_Flags( canMove ); // indicating allowed move
+        auto iMonomer = dpOriginalIds[ iMonomerCompacted ];
+        auto const properties = dpPolymerFlags[ iMonomer ];
+
+        auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iMonomerCompacted ];
+        //auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iMonomerCompacted ];
+        //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // slower
+        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+            continue;
+
         /* If possible, perform move now on normal lattice */
-        if ( canMove )
-        {
-            dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
-            dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
-                                                r0.y + DYTable_d[ direction ],
-                                                r0.z + DZTable_d[ direction ] ) ] = 1;
-        }
+        dpPolymerFlags[ iMonomer ] = properties | T_Flags(2); // indicating allowed move
+        dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
+        dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
+                                            r0.y + DYTable_d[ direction ],
+                                            r0.z + DZTable_d[ direction ] ) ] = 1;
         /* We can't clean the temporary lattice in here, because it still is being
          * used for checks. For cleaning we need only the new positions.
          * But we can't use the applied positions, because we also need to clean
@@ -768,6 +780,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
          * still set in the lattice by the first kernel! */
     }
 }
+
 
 __global__ void kernelCountFilteredPerform
 (
@@ -810,42 +823,41 @@ __global__ void kernelCountFilteredPerform
  */
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
+    intCUDA             * const __restrict__ dpPolymerSystem         ,
+    T_Flags       const * const __restrict__ dpPolymerFlags          ,
+    uint8_t             * const __restrict__ dpLatticeTmp            ,
     uint32_t              const              nTotalMonomers          ,
-    uint32_t      const * const __restrict__ dpnRemainingPerBlock    ,
+    uint32_t            * const __restrict__ dpnRemainingPerBlock    ,
     uint32_t      const *       __restrict__ dpOriginalIds           ,
     intCUDA       const *       __restrict__ dpCompactedPolymerSystem,
-    int                   const              nPitchCompacted         ,
-    intCUDA             * const __restrict__ dpPolymerSystem         ,
-    T_Flags       const *       __restrict__ dpPolymerFlags          ,
-    uint8_t             * const __restrict__ dpLatticeTmp
+    int                   const              nPitchCompacted
 )
 {
     auto const nMonomers = dpnRemainingPerBlock[ blockIdx.x ];
     if ( ! ( threadIdx.x < nMonomers ) )
         return;
 
-    auto const nMaxWritablePerBlock = ceilDiv( nTotalMonomers, gridDim.x );
-    auto const offsetThisBlock = blockIdx.x * nMaxWritablePerBlock;
-    dpPolymerFlags += offsetThisBlock;
-    dpOriginalIds  += offsetThisBlock;
+    auto const offsetThisBlock = blockIdx.x * nPitchCompacted;
+    dpOriginalIds            += offsetThisBlock;
+    dpCompactedPolymerSystem += offsetThisBlock * 3;
 
-    for ( auto iCompactedMonomer = threadIdx.x; iCompactedMonomer < nMonomers;
-          iCompactedMonomer += blockDim.x )
+    for ( auto iMonomerCompacted = threadIdx.x; iMonomerCompacted < nMonomers;
+          iMonomerCompacted += blockDim.x )
     {
-        auto const properties = dpPolymerFlags[ iCompactedMonomer ];
+        auto const iMonomer = dpOriginalIds[ iMonomerCompacted ];
+        auto const properties = dpPolymerFlags[ iMonomer ];
+        if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
+            continue;
 
-        auto r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ offsetThisBlock + iCompactedMonomer ];
+        auto r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iMonomerCompacted ];
         auto const direction = properties >> T_Flags(2);
 
         r0.x += DXTableIntCUDA_d[ direction ];
         r0.y += DYTableIntCUDA_d[ direction ];
         r0.z += DZTableIntCUDA_d[ direction ];
         dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
-        if ( properties & T_Flags(1) )
-        {
-            auto const iMonomer = dpOriginalIds[ iCompactedMonomer ];
+        if ( properties & T_Flags(2) )
             ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
-        }
     }
 }
 
@@ -1675,8 +1687,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mLatticeOut->texture,
                 nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, nPitchCompacted
             );
-            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
-            if ( iStep <= 2 )
+
+            if ( iStep < 0 )
             {
                 nRemainingPerBlock.pop();
                 std::cout << "Remaining monomers per each of the " << nBlocks << " blocks a " << mnThreads << " threads at step " << iStep << " substep " << iSubStep << ":";
@@ -1720,12 +1732,13 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMPerformSpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
-                mnElementsInGroup[ iSpecies ],
-                nRemainingPerBlock.gpu, compactedPositions.gpu, nPitchCompacted,
+                mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
-                mLatticeTmp->texture, mLatticeOut->gpu
+                mLatticeOut->gpu,
+                mnElementsInGroup[ iSpecies ],
+                mLatticeTmp->texture,
+                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, nPitchCompacted
             );
-            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
 
             if ( mLog.isActive( "Stats" ) )
             {
@@ -1742,13 +1755,12 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMZeroArraySpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
-                mnElementsInGroup[ iSpecies ],
-                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, nPitchCompacted,
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
-                mLatticeTmp->gpu
+                mLatticeTmp->gpu,
+                mnElementsInGroup[ iSpecies ],
+                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, nPitchCompacted
             );
-            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
 
             if ( mLog.isActive( "Stats" ) )
             {
@@ -1758,7 +1770,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 CUDA_ERROR( cudaMemsetAsync( (void*) dpFiltered, 0, nFilters * sizeof( *dpFiltered ), mStream ) );
 
                 if ( iStep < 3 )
-                    std::cout << "Filtered in step " << iStep << " substep " << iSubStep << ": " << vFiltered[0] << ", " << vFiltered[1] << ", " << vFiltered[2] << ", " << vFiltered[3] << "\n";
+                    std::cout << "Filtered in step " << iStep << " substep " << iSubStep << ": " << vFiltered[0] << ", " << vFiltered[1] << ", " << vFiltered[2] << ", " << vFiltered[3] << " => " << mnElementsInGroup[ iSpecies ] - vFiltered[1] - vFiltered[3] << " remaining after kernel 1\n";
+
 
                 for ( auto iFilter = 0u; iFilter < nFilters; ++iFilter )
                 {
