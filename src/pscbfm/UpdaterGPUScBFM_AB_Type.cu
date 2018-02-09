@@ -566,7 +566,6 @@ __global__ void kernelSimulationScBFMCheckSpecies
             rn = hash( hash( iMonomer ) ^ rSeed );
 
         T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
-        T_Flags properties = 0;
 
          /* select random direction. Do this with bitmasking instead of lookup ??? */
         /* int4 const dr = { DXTable_d[ direction ],
@@ -598,13 +597,14 @@ __global__ void kernelSimulationScBFMCheckSpecies
                     break;
                 }
             }
+            bool mightMove = false;
             if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
             {
                 /* everything fits so perform move on temporary lattice */
                 /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
                  * texture used above. Won't this result in read-after-write race-conditions?
                  * Then again the written / changed bits are never used in the above code ... */
-                properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
+                mightMove = true;
                 dpLatticeTmp[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
             }
     #ifdef NONPERIODICITY
@@ -612,19 +612,44 @@ __global__ void kernelSimulationScBFMCheckSpecies
     #endif
         /* not needed, because blockReduceCumSumPredicate has one */
         //__syncthreads(); // wait till smnWritten was set to 0 or updated in last loop
-        auto const iToWriteThisLoop  = blockReduceCumSumPredicate( properties & 1, smBuffer ) - 1;
-        auto const iToWrite          = smnWritten + iToWriteThisLoop; /* this block, but we already incremented all write arrays further above */
-        if ( properties & T_Flags(1) )
+
+        int cumsum, sum;
+        {
+            cumsum = warpReduceCumSumPredicate( mightMove );
+            sum    = warpReduceSumPredicate   ( mightMove );
+            if ( threadIdx.x < warpSize )
+                smBuffer[ threadIdx.x ] = 0;
+            __syncthreads();
+            auto const iSubarray = threadIdx.x / warpSize;
+            if ( threadIdx.x % warpSize == 0 )
+                smBuffer[ iSubarray ] = sum;
+            __syncthreads();
+            int globalCumSum;
+            if ( threadIdx.x < warpSize )
+            {
+                globalCumSum = warpReduceCumSum( smBuffer[ threadIdx.x ] );
+                sum          = warpReduceSum   ( smBuffer[ threadIdx.x ] );
+            }
+            __syncthreads();
+            if ( threadIdx.x < warpSize )
+                smBuffer[ threadIdx.x ] = globalCumSum;
+            __syncthreads();
+            if ( iSubarray > 0 )
+                cumsum += smBuffer[ iSubarray-1 ];
+            __syncthreads();
+        }
+
+        auto const iToWrite = smnWritten + cumsum - 1; /* this block, but we already incremented all write arrays further above */
+        if ( mightMove )
         {
             ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iToWrite ] = r0;
             dpOriginalIds [ iToWrite ] = iMonomer;
             dpPolymerFlags[ iToWrite ] = direction;
         }
-        auto const nToWrite = blockReduceSumPredicate( properties & 1, smBuffer ) - 1;
         /* don't need this, because blockReduceSumPredicate has a __syncthreads */
-        //__syncthreads(); // wait till everyone read smnWritten before writing to it
+        __syncthreads();
         if ( threadIdx.x == 0 )
-            smnWritten += nToWrite;
+            smnWritten += sum;
     }
     __syncthreads(); // wait for smnWritten to be updated
     if ( threadIdx.x == 0 )
@@ -647,53 +672,48 @@ __global__ void kernelCountFilteredCheck
     unsigned long long int * const __restrict__ dpFiltered
 )
 {
-  for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x; iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
-  {
-    auto const data = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
-    auto const & x0 = data.x;
-    auto const & y0 = data.y;
-    auto const & z0 = data.z;
-    //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
-    T_Flags const direction = hash( hash( iMonomer ) ^ rSeed ) % 6;
-
-     /* select random direction. Do this with bitmasking instead of lookup ??? */
-    auto const dx = DXTable_d[ direction ];
-    auto const dy = DYTable_d[ direction ];
-    auto const dz = DZTable_d[ direction ];
-
-#ifdef NONPERIODICITY
-   /* check whether the new location of the particle would be inside the box
-    * if the box is not periodic, if not, then don't move the particle */
-    if ( ! ( uint32_t(0) <= x0 + dx && x0 + dx < dcBoxXM1 &&
-             uint32_t(0) <= y0 + dy && y0 + dy < dcBoxYM1 &&
-             uint32_t(0) <= z0 + dz && z0 + dz < dcBoxZM1 ) )
+    uint32_t rn;
+    int iGrid = 0;
+    for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+          iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
     {
-        atomicAdd( dpFiltered+0, size_t(1) );
-    }
-#endif
-    /* check whether the new position would result in invalid bonds
-     * between this monomer and its neighbors */
-    auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
-    bool invalidBond = false;
-    for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
-    {
-        auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-        auto const data2 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
-        if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - x0 - dx, data2.y - y0 - dy, data2.z - z0 - dz ) ] )
+        auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+        if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
+            rn = hash( hash( iMonomer ) ^ rSeed );
+        T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
+        uint3 const r1 = { r0.x + DXTable_d[ direction ],
+                           r0.y + DYTable_d[ direction ],
+                           r0.z + DZTable_d[ direction ] };
+    #ifdef NONPERIODICITY
+        if ( uint32_t(0) <= r1.x && r1.x < dcBoxXM1 &&
+             uint32_t(0) <= r1.y && r1.y < dcBoxYM1 &&
+             uint32_t(0) <= r1.z && r1.z < dcBoxZM1    )
         {
-            atomicAdd( dpFiltered+1, 1 );
-            invalidBond = true;
-            break;
+    #endif
+            auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
+            bool forbiddenBond = false;
+            for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
+            {
+                auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
+                auto const data2 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
+                if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r1.x, data2.y - r1.y, data2.z - r1.z ) ] )
+                {
+                    atomicAdd( dpFiltered+1, 1 );
+                    forbiddenBond = true;
+                    break;
+                }
+            }
+            if ( checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
+            {
+                atomicAdd( dpFiltered+2, 1 );
+                if ( ! forbiddenBond ) /* this is the more real relative use-case where invalid bonds are already filtered out */
+                    atomicAdd( dpFiltered+3, 1 );
+            }
+    #ifdef NONPERIODICITY
         }
+        else atomicAdd( dpFiltered+0, size_t(1) );
+    #endif
     }
-
-    if ( checkFront( texLatticeRefOut, x0, y0, z0, direction ) )
-    {
-        atomicAdd( dpFiltered+2, 1 );
-        if ( ! invalidBond ) /* this is the more real relative use-case where invalid bonds are already filtered out */
-            atomicAdd( dpFiltered+3, 1 );
-    }
-  }
 }
 
 
@@ -731,19 +751,24 @@ __global__ void kernelSimulationScBFMPerformSpecies
         return;
 
     for ( auto iCompactedMonomer = threadIdx.x; iCompactedMonomer < nMonomers;
-          iCompactedMonomer += gridDim.x * blockDim.x )
+          iCompactedMonomer += blockDim.x )
     {
         auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iCompactedMonomer ];
         auto const direction = dpPolymerFlags[ iCompactedMonomer ];
-        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
-            continue;
 
+        bool canMove = true;
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+            canMove = false;
+
+        dpPolymerFlags[ iCompactedMonomer ] = ( direction << T_Flags(2) ) | T_Flags( canMove ); // indicating allowed move
         /* If possible, perform move now on normal lattice */
-        dpPolymerFlags[ iCompactedMonomer ] = ( direction << 1 ) | T_Flags(1); // indicating allowed move
-        dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
-        dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
-                                            r0.y + DYTable_d[ direction ],
-                                            r0.z + DZTable_d[ direction ] ) ] = 1;
+        if ( canMove )
+        {
+            dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
+            dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
+                                                r0.y + DYTable_d[ direction ],
+                                                r0.z + DZTable_d[ direction ] ) ] = 1;
+        }
         /* We can't clean the temporary lattice in here, because it still is being
          * used for checks. For cleaning we need only the new positions.
          * But we can't use the applied positions, because we also need to clean
@@ -815,14 +840,12 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         return;
 
     for ( auto iCompactedMonomer = threadIdx.x; iCompactedMonomer < nMonomers;
-          iCompactedMonomer += gridDim.x * blockDim.x )
+          iCompactedMonomer += blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iCompactedMonomer ];
-        if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
-            continue;
 
         auto r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iCompactedMonomer ];
-        auto const direction = properties >> T_Flags(1);
+        auto const direction = properties >> T_Flags(2);
 
         r0.x += DXTableIntCUDA_d[ direction ];
         r0.y += DYTableIntCUDA_d[ direction ];
@@ -1674,6 +1697,18 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 for ( auto i = 0u; i < nBlocks; ++i )
                     nRemaining += nRemainingPerBlock.host[i];
                 std::cout << "Remaining particles in total: " << nRemaining << " / " << mnElementsInGroup[ iSpecies ] << " (" << nRemaining * 100.f / mnElementsInGroup[ iSpecies ] << "%)\n";
+
+                /* originalIds */
+                originalIds.pop();
+                auto const nMaxWritablePerBlock = ceilDiv( mnElementsInGroup[ iSpecies ], nBlocks );
+                std::cout << "The original IDs which can move (only for the first four blocks) (pitched with " << nMaxWritablePerBlock << "):\n";
+                for ( auto i = 0u; i < std::min< unsigned int >( 4u, nBlocks ); ++i )
+                {
+                    std::cout << "Block " << i << ":";
+                    for ( auto j = 0u; j < nRemainingPerBlock.host[i]; ++j )
+                        std::cout << " " << originalIds.host[ i*nMaxWritablePerBlock + j ];
+                    std::cout << "\n";
+                }
             }
 
             if ( mLog.isActive( "Stats" ) )
@@ -1731,6 +1766,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     nFilters * sizeof( *dpFiltered ), cudaMemcpyDeviceToHost, mStream ) );
                 CUDA_ERROR( cudaStreamSynchronize( mStream ) );
                 CUDA_ERROR( cudaMemsetAsync( (void*) dpFiltered, 0, nFilters * sizeof( *dpFiltered ), mStream ) );
+
+                if ( iStep < 3 )
+                    std::cout << "Filtered in step " << iStep << " substep " << iSubStep << ": " << vFiltered[0] << ", " << vFiltered[1] << ", " << vFiltered[2] << ", " << vFiltered[3] << "\n";
 
                 for ( auto iFilter = 0u; iFilter < nFilters; ++iFilter )
                 {
