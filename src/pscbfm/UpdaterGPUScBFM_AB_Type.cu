@@ -526,19 +526,20 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
 using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    intCUDA     const * const __restrict__ dpPolymerSystem        ,
-    T_Flags           *       __restrict__ dpPolymerFlags         ,
-    uint32_t            const              iOffset                ,
-    uint8_t           * const __restrict__ dpLatticeTmp           ,
-    uint32_t    const * const __restrict__ dpNeighbors            ,
-    uint32_t            const              rNeighborsPitchElements,
-    uint8_t     const * const __restrict__ dpNeighborsSizes       ,
-    uint32_t            const              nMonomers              ,
-    uint32_t            const              rSeed                  ,
-    cudaTextureObject_t const              texLatticeRefOut       ,
-    uint32_t          * const __restrict__ dpnRemainingPerBlock   ,
-    uint32_t          *       __restrict__ dpOriginalIds          ,
-    intCUDA           *       __restrict__ dpCompactedPolymerSystem
+    intCUDA     const * const __restrict__ dpPolymerSystem         ,
+    T_Flags           *       __restrict__ dpPolymerFlags          ,
+    uint32_t            const              iOffset                 ,
+    uint8_t           * const __restrict__ dpLatticeTmp            ,
+    uint32_t    const * const __restrict__ dpNeighbors             ,
+    uint32_t            const              rNeighborsPitchElements ,
+    uint8_t     const * const __restrict__ dpNeighborsSizes        ,
+    uint32_t            const              nMonomers               ,
+    uint32_t            const              rSeed                   ,
+    cudaTextureObject_t const              texLatticeRefOut        ,
+    uint32_t          * const __restrict__ dpnRemainingPerBlock    ,
+    uint32_t          *       __restrict__ dpOriginalIds           ,
+    intCUDA           *       __restrict__ dpCompactedPolymerSystem,
+    int                 const              nPitchCompacted
 )
 {
     /* needed for stream compaction reduction */
@@ -547,11 +548,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     if ( threadIdx.x == 0 )
         smnWritten = 0;
 
-    auto const nMaxWritablePerBlock = ceilDiv( nMonomers, gridDim.x );
-    auto const offsetThisBlock = blockIdx.x * nMaxWritablePerBlock;
-    dpPolymerFlags           += offsetThisBlock;
-    dpOriginalIds            += offsetThisBlock;
-    dpCompactedPolymerSystem += offsetThisBlock;
+    auto const offsetThisBlock = blockIdx.x * nPitchCompacted;
+    dpPolymerFlags += offsetThisBlock;
+    dpOriginalIds  += offsetThisBlock;
 
     uint32_t rn;
     int iGrid = 0;
@@ -642,7 +641,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
         auto const iToWrite = smnWritten + cumsum - 1; /* this block, but we already incremented all write arrays further above */
         if ( mightMove )
         {
-            ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iToWrite ] = r0;
+            ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ offsetThisBlock + iToWrite ] = r0;
             dpOriginalIds [ iToWrite ] = iMonomer;
             dpPolymerFlags[ iToWrite ] = direction;
         }
@@ -660,7 +659,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
 __global__ void kernelCountFilteredCheck
 (
     intCUDA          const * const __restrict__ dpPolymerSystem        ,
-    T_Flags          const * const __restrict__ dpPolymerFlags         ,
+    T_Flags          const * const __restrict__ /* dpPolymerFlags */   ,
     uint32_t                 const              iOffset                ,
     uint8_t          const * const __restrict__ /* dpLatticeTmp */     ,
     uint32_t         const * const __restrict__ dpNeighbors            ,
@@ -727,6 +726,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
     uint32_t              const              nTotalMonomers          ,
     uint32_t      const * const __restrict__ dpnRemainingPerBlock    ,
     intCUDA       const *       __restrict__ dpCompactedPolymerSystem,
+    int                   const              nPitchCompacted         ,
     T_Flags             *       __restrict__ dpPolymerFlags          ,
     cudaTextureObject_t   const              texLatticeTmp           ,
     uint8_t             * const __restrict__ dpLattice
@@ -740,26 +740,18 @@ __global__ void kernelSimulationScBFMPerformSpecies
      * 32 threads instead of 128 ... well that in turn would be meh... better
      * something like 128 instead of 512?!
      */
-    if ( threadIdx.x < nMonomers )
-    {
-        auto const nMaxWritablePerBlock = ceilDiv( nTotalMonomers, gridDim.x );
-        auto const offsetThisBlock = blockIdx.x * nMaxWritablePerBlock;
-        dpPolymerFlags           += offsetThisBlock;
-        dpCompactedPolymerSystem += offsetThisBlock;
-    }
-    else
+    if ( ! ( threadIdx.x < nMonomers ) )
         return;
+
+    auto const offsetThisBlock = blockIdx.x * nPitchCompacted;
+    dpPolymerFlags += offsetThisBlock;
 
     for ( auto iCompactedMonomer = threadIdx.x; iCompactedMonomer < nMonomers;
           iCompactedMonomer += blockDim.x )
     {
-        auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iCompactedMonomer ];
+        auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ offsetThisBlock + iCompactedMonomer ];
         auto const direction = dpPolymerFlags[ iCompactedMonomer ];
-
-        bool canMove = true;
-        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
-            canMove = false;
-
+        auto const canMove = ! checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction );
         dpPolymerFlags[ iCompactedMonomer ] = ( direction << T_Flags(2) ) | T_Flags( canMove ); // indicating allowed move
         /* If possible, perform move now on normal lattice */
         if ( canMove )
@@ -822,29 +814,27 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     uint32_t      const * const __restrict__ dpnRemainingPerBlock    ,
     uint32_t      const *       __restrict__ dpOriginalIds           ,
     intCUDA       const *       __restrict__ dpCompactedPolymerSystem,
+    int                   const              nPitchCompacted         ,
     intCUDA             * const __restrict__ dpPolymerSystem         ,
     T_Flags       const *       __restrict__ dpPolymerFlags          ,
     uint8_t             * const __restrict__ dpLatticeTmp
 )
 {
     auto const nMonomers = dpnRemainingPerBlock[ blockIdx.x ];
-    if ( threadIdx.x < nMonomers )
-    {
-        auto const nMaxWritablePerBlock = ceilDiv( nTotalMonomers, gridDim.x );
-        auto const offsetThisBlock = blockIdx.x * nMaxWritablePerBlock;
-        dpPolymerFlags           += offsetThisBlock;
-        dpOriginalIds            += offsetThisBlock;
-        dpCompactedPolymerSystem += offsetThisBlock;
-    }
-    else
+    if ( ! ( threadIdx.x < nMonomers ) )
         return;
+
+    auto const nMaxWritablePerBlock = ceilDiv( nTotalMonomers, gridDim.x );
+    auto const offsetThisBlock = blockIdx.x * nMaxWritablePerBlock;
+    dpPolymerFlags += offsetThisBlock;
+    dpOriginalIds  += offsetThisBlock;
 
     for ( auto iCompactedMonomer = threadIdx.x; iCompactedMonomer < nMonomers;
           iCompactedMonomer += blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iCompactedMonomer ];
 
-        auto r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ iCompactedMonomer ];
+        auto r0 = ( (CudaVec3< intCUDA >::value_type *) dpCompactedPolymerSystem )[ offsetThisBlock + iCompactedMonomer ];
         auto const direction = properties >> T_Flags(2);
 
         r0.x += DXTableIntCUDA_d[ direction ];
@@ -1665,6 +1655,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             auto const iSpecies = randomNumbers.r250_rand32() % mnElementsInGroup.size();
             auto const seed     = randomNumbers.r250_rand32();
             auto const nBlocks  = mnBlocksForGroup.at( iSpecies );
+            auto const nPitchCompacted = ceilDiv( mnElementsInGroup[ iSpecies ], nBlocks );
 
             /*
             if ( iStep < 3 )
@@ -1682,7 +1673,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mNeighborsSortedSizes->gpu,
                 mnElementsInGroup[ iSpecies ], seed,
                 mLatticeOut->texture,
-                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu
+                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, nPitchCompacted
             );
             CUDA_ERROR( cudaStreamSynchronize( mStream ) );
             if ( iStep <= 2 )
@@ -1700,13 +1691,12 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
                 /* originalIds */
                 originalIds.pop();
-                auto const nMaxWritablePerBlock = ceilDiv( mnElementsInGroup[ iSpecies ], nBlocks );
-                std::cout << "The original IDs which can move (only for the first four blocks) (pitched with " << nMaxWritablePerBlock << "):\n";
+                std::cout << "The original IDs which can move (only for the first four blocks) (pitched with " << nPitchCompacted << "):\n";
                 for ( auto i = 0u; i < std::min< unsigned int >( 4u, nBlocks ); ++i )
                 {
                     std::cout << "Block " << i << ":";
                     for ( auto j = 0u; j < nRemainingPerBlock.host[i]; ++j )
-                        std::cout << " " << originalIds.host[ i*nMaxWritablePerBlock + j ];
+                        std::cout << " " << originalIds.host[ i*nPitchCompacted + j ];
                     std::cout << "\n";
                 }
             }
@@ -1731,7 +1721,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             kernelSimulationScBFMPerformSpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
                 mnElementsInGroup[ iSpecies ],
-                nRemainingPerBlock.gpu, compactedPositions.gpu,
+                nRemainingPerBlock.gpu, compactedPositions.gpu, nPitchCompacted,
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->texture, mLatticeOut->gpu
             );
@@ -1753,7 +1743,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             kernelSimulationScBFMZeroArraySpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
                 mnElementsInGroup[ iSpecies ],
-                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu,
+                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, nPitchCompacted,
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu
