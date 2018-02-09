@@ -32,14 +32,24 @@ __global__ void kernelTestSum
 (
     unsigned int         const              dpnToReduce   ,
     unsigned int const * const __restrict__ dpDataToReduce,
-    unsigned int       * const __restrict__ dpResults
+    unsigned int       * const __restrict__ dpResults     ,
+    unsigned int         const              iToTest
 )
 {
+    if ( dpnToReduce == 0 )
+        *dpResults = 0;
+
     __shared__ int smBuffer[32];
     if ( threadIdx.x < dpnToReduce )
     {
-        //auto const sum = blockReduceSum( (int)dpDataToReduce[ threadIdx.x ], smBuffer );
-        auto const sum = warpReduceSum( (int)dpDataToReduce[ threadIdx.x ] );
+        int sum = 0;
+        switch ( iToTest )
+        {
+            case 0: sum =  warpReduceSum( (int) dpDataToReduce[ threadIdx.x ] ); break;
+            case 1: sum = blockReduceSum( (int) dpDataToReduce[ threadIdx.x ], smBuffer ); break;
+            case 2: sum =  warpReduceSumPredicate( (bool) dpDataToReduce[ threadIdx.x ] ); break;
+            case 3: sum = blockReduceSumPredicate( (bool) dpDataToReduce[ threadIdx.x ], smBuffer ); break;
+        }
         if ( threadIdx.x == 0 )
             *dpResults = sum;
     }
@@ -51,58 +61,87 @@ int main( void )
 {
     std::srand( 87134623 );
     auto constexpr nTests = 100;
-    auto constexpr nRepeatTests = 20; /* with different kernel configs */
+    auto constexpr nRepeatTests = 2; /* with different kernel configs */
     auto constexpr maxValueInTests = 128;
 
     int iDevice = 0;
     CUDA_ERROR( cudaGetDevice( &iDevice ) );
     cudaDeviceProp props;
     CUDA_ERROR( cudaGetDeviceProperties( &props, iDevice ) );
-    auto const nMaxValuesPerTest = props.maxThreadsPerBlock; // 32
 
-    MirroredVector< unsigned int > nToReduce( nTests );
-    MirroredVector< unsigned int > dataToReduce( nMaxValuesPerTest * nTests );
-    MirroredVector< unsigned int > resultsGpu ( nTests );
-    MirroredVector< unsigned int > resultsHost( nTests );
-    std::generate( nToReduce.host, nToReduce.host + nToReduce.nElements, [
-                   =](){ return std::rand() % nMaxValuesPerTest; } );
-    std::generate( dataToReduce.host, dataToReduce.host + dataToReduce.nElements, [
-                   =](){ return std::rand() % maxValueInTests; } );
-    dataToReduce.push();
-
-    std::cout << "Test | GPU sum | Host sum\n";
-    for ( auto iRepetition = 0u; iRepetition < nRepeatTests; ++iRepetition )
+    /**
+     * iKernel == 0 checks warpReduceSum, iKernel == 1 checks blockReduceSum
+     * 2,3 as above, but for predicate
+     * 4,5,6,7 same as the four above, but cumsum -> need to copy-paste, because will get too complicated
+     */
+    for ( int iKernel = 0; iKernel < 4; ++iKernel )
     {
-        for ( auto iTest = 0u; iTest < nTests; ++iTest )
+        auto const nMaxValuesPerTest = ( iKernel % 2 == 0 ? 32 /* warp reduces */ : props.maxThreadsPerBlock );
+
+        MirroredVector< unsigned int > nToReduce( nTests );
+        MirroredVector< unsigned int > dataToReduce( nMaxValuesPerTest * nTests );
+        MirroredVector< unsigned int > resultsGpu ( nTests );
+        MirroredVector< unsigned int > resultsHost( nTests );
+        std::generate( nToReduce.host, nToReduce.host + nToReduce.nElements, [
+                       =](){ return std::rand() % nMaxValuesPerTest; } );
+        std::generate( dataToReduce.host, dataToReduce.host + dataToReduce.nElements, [
+                       =](){ return std::rand() % maxValueInTests; } );
+        dataToReduce.push();
+
+        std::vector< std::string > sTestNames = { "warpReduceSum", "blockReduceSum", "warpReduceSumPredicate", "blockReduceSumPredicate" };
+        std::cout << "========= " << sTestNames[ iKernel ] << " =========\n";
+        std::cout << "Kernel | (nBlocks,nThreads) | Test | GPU sum | Host sum (only showing fails)\n";
+        for ( auto iRepetition = 0u; iRepetition < nRepeatTests; ++iRepetition )
         {
-            auto const nThreads = nToReduce.host[ iTest ];
-            kernelTestSum<<< 1, nThreads >>>(
-                nToReduce.host[ iTest ],
-                dataToReduce.gpu + iTest * nMaxValuesPerTest,
-                resultsGpu.gpu + iTest
-            );
-            CUDA_ERROR( cudaStreamSynchronize(0) );
-            CUDA_ERROR( cudaPeekAtLastError() );
-        }
-        /* do summing on CPU */
-        std::fill( resultsHost.host, resultsHost.host + resultsHost.nElements, 0 );
-        for ( auto iTest = 0u; iTest < nTests; ++iTest )
-        for ( auto i = 0u; i < nToReduce.host[ iTest ]; ++i )
-            resultsHost.host[ iTest ] += dataToReduce.host[ iTest * nMaxValuesPerTest + i ];
-        resultsGpu.pop();
-        /* compare sums and print debug output */
-        for ( auto iTest = 0u; iTest < nTests; ++iTest )
-        {
-            if ( resultsGpu.host[ iTest ] != resultsHost.host[ iTest ] )
+            for ( auto iTest = 0u; iTest < nTests; ++iTest )
             {
-                std::cout
-                << std::setw(5) << iTest << " "
-                << std::setw(8) << resultsGpu .host[ iTest ] << "  "
-                << std::setw(8) << resultsHost.host[ iTest ] << " => "
-                << ( resultsGpu.host[ iTest ] == resultsHost.host[ iTest ] ? "OK" : "FAIL" )
-                << "\n";
+                auto const nBlocks = 1;
+                auto const nThreads = std::max( 1u, nToReduce.host[ iTest ] );
+                kernelTestSum<<< nBlocks, nThreads >>>(
+                    nToReduce.host[ iTest ],
+                    dataToReduce.gpu + iTest * nMaxValuesPerTest,
+                    resultsGpu.gpu + iTest,
+                    iKernel
+                );
+                CUDA_ERROR( cudaStreamSynchronize(0) );
+                CUDA_ERROR( cudaPeekAtLastError() );
             }
-            assert( resultsGpu.host[ iTest ] == resultsHost.host[ iTest ] );
+
+            /* do summing on CPU */
+            std::fill( resultsHost.host, resultsHost.host + resultsHost.nElements, 0 );
+            for ( auto iTest = 0u; iTest < nTests; ++iTest )
+            for ( auto i = 0u; i < nToReduce.host[ iTest ]; ++i )
+            {
+                switch ( iKernel )
+                {
+                    case 0: case 1:
+                        resultsHost.host[ iTest ] += dataToReduce.host[ iTest * nMaxValuesPerTest + i ];
+                        break;
+                    case 2: case 3:
+                        resultsHost.host[ iTest ] += (bool) dataToReduce.host[ iTest * nMaxValuesPerTest + i ];
+                        break;
+                }
+            }
+            resultsGpu.pop();
+
+            /* compare sums and print debug output */
+            for ( auto iTest = 0u; iTest < nTests; ++iTest )
+            {
+                auto const nBlocks = 1;
+                auto const nThreads = nToReduce.host[ iTest ];
+                if ( resultsGpu.host[ iTest ] != resultsHost.host[ iTest ] )
+                {
+                    std::cout
+                    << std::setw(6) << iKernel << " | ("
+                    << std::setw(10) << nBlocks << "," << std::setw(5) << nThreads << ") | "
+                    << std::setw(4) << iTest << " | "
+                    << std::setw(8) << resultsGpu .host[ iTest ] << "  "
+                    << std::setw(8) << resultsHost.host[ iTest ] << " => "
+                    << ( resultsGpu.host[ iTest ] == resultsHost.host[ iTest ] ? "OK" : "FAIL" )
+                    << "\n";
+                }
+                assert( resultsGpu.host[ iTest ] == resultsHost.host[ iTest ] );
+            }
         }
     }
 }

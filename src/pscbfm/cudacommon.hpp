@@ -289,6 +289,7 @@ T warpReduceSum( T x )
     return x;
 }
 
+template< typename T > __inline__ __device__
 T warpAllReduceSum( T x )
 {
 #if 0
@@ -421,6 +422,13 @@ __device__ inline int warpReduceCumSumPredicate( bool const x )
     return __popc( __ballot(x) & mask );
 }
 
+__device__ inline int warpReduceSumPredicate( bool const x )
+{
+    /* Inactive threads are represented by 0 bit!
+     * @see https://stackoverflow.com/questions/23589734/ballot-behavior-on-inactive-lanes?rq=1 */
+    return __popc( __ballot(x) );
+}
+
 /**
  * return type is int, because that's the return type for popc
  * and therefore by extension the one for __shfl, therefore typecasts
@@ -446,6 +454,11 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
     /* the first warp now reduces these intermediary sums to another cumsum
      * and writes it back. This is enough assuming that warpSize * warpSize <=
      * maxThreadsPerBlock, which is the case normally, i.e. 32^2 <= 1024 */
+    /* DOOOOOOOOOOOOOOOOOOOOOOOOONNNNNNNTTTTTTTTT put __syncthreads inside
+     * an if-statement if you ever wanna use it ouside the if statement again!
+     * The bug caused by using this commented code, cost me hours to track
+     * down ... */
+    /*
     if ( threadIdx.x < warpSize )
     {
         __syncthreads();
@@ -453,6 +466,14 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
         __syncthreads();
         smBuffer[ threadIdx.x ] = globalCumSum;
     }
+    */
+    __syncthreads();
+    int globalCumSum;
+    if ( threadIdx.x < warpSize )
+        globalCumSum = warpReduceCumSum( smBuffer[ threadIdx.x ] );
+    __syncthreads();
+    if ( threadIdx.x < warpSize )
+        smBuffer[ threadIdx.x ] = globalCumSum;
     /* now we need to apply these cumsums which kinda act like global offsets
      * to all our "small" cumsum variations */
     __syncthreads();
@@ -464,36 +485,29 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
     return cumsum;
 }
 
-/**
- * same as blockReduceCumSumPredicate, just replace cumsum with sum and
- * watch out to adjust the write to smBuffer
- */
 __device__ inline int blockReduceSumPredicate( bool const x, int * const smBuffer )
 {
     assert( threadIdx.y == 0 );
     assert( threadIdx.z == 0 );
     assert( blockDim.x <= warpSize * warpSize );
-    auto sum = __popc( __ballot(x) );
+    auto sum = warpReduceSumPredicate( x );
     if ( threadIdx.x < warpSize )
         smBuffer[ threadIdx.x ] = 0;
     __syncthreads();
-    auto const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == 0 )
-        smBuffer[ iSubarray ] = sum;
+        smBuffer[ threadIdx.x / warpSize ] = sum;
+    __syncthreads();
     if ( threadIdx.x < warpSize )
-    {
-        __syncthreads();
-        auto const globalSum = warpReduceSum( smBuffer[ threadIdx.x ] );
-        __syncthreads();
-        smBuffer[ threadIdx.x ] = globalSum;
-    }
+        sum = warpReduceSum( smBuffer[ threadIdx.x ] );
     __syncthreads();
-    if ( iSubarray > 0 )
-        sum += smBuffer[ iSubarray-1 ];
-    __syncthreads();
+    // only threadIdx.x == 0 has the correct value!
     return sum;
 }
 
+/**
+ * same as blockReduceSumPredicate just delate the "Predicate" inside first
+ * warp reduce function name
+ */
 __device__ inline int blockReduceSum( int const x, int * const smBuffer )
 {
     assert( threadIdx.y == 0 );
@@ -508,12 +522,7 @@ __device__ inline int blockReduceSum( int const x, int * const smBuffer )
         smBuffer[ iSubarray ] = sum;
     __syncthreads();
     if ( threadIdx.x < warpSize )
-    {
-        auto const globalSum = warpReduceSum( smBuffer[ threadIdx.x ] );
-        __syncthreads();
-        smBuffer[ threadIdx.x ] = globalSum;
-    }
-    __syncthreads();
+        sum = warpReduceSum( smBuffer[ threadIdx.x ] );
     // only threadIdx.x == 0 has the correct value!
     return sum;
 }
