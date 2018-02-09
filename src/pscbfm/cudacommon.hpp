@@ -485,6 +485,33 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
     return cumsum;
 }
 
+/**
+ * exactly same as blockReduceCumSumPredicate, but loose the 'Predicate'
+ * suffix in al function names
+ */
+__device__ inline int blockReduceCumSum( int const x, int * const smBuffer )
+{
+    assert( threadIdx.y == 0 );
+    assert( threadIdx.z == 0 );
+    assert( blockDim.x <= warpSize * warpSize );
+    auto cumsum = warpReduceCumSum( x );
+    auto const iSubarray = threadIdx.x / warpSize;
+    if ( threadIdx.x % warpSize == warpSize - 1 )
+        smBuffer[ iSubarray ] = cumsum;
+    __syncthreads();
+    int globalCumSum;
+    if ( threadIdx.x < warpSize )
+        globalCumSum = warpReduceCumSum( smBuffer[ threadIdx.x ] );
+    __syncthreads();
+    if ( threadIdx.x < warpSize )
+        smBuffer[ threadIdx.x ] = globalCumSum;
+    __syncthreads();
+    if ( iSubarray > 0 )
+        cumsum += smBuffer[ iSubarray-1 ];
+    __syncthreads();
+    return cumsum;
+}
+
 __device__ inline int blockReduceSumPredicate( bool const x, int * const smBuffer )
 {
     assert( threadIdx.y == 0 );
