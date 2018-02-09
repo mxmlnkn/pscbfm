@@ -541,7 +541,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     intCUDA           *       __restrict__ dpCompactedPolymerSystem
 )
 {
-    /* needwed for stream compaction reduction */
+    /* needed for stream compaction reduction */
     __shared__ int smBuffer[32];
     __shared__ uint32_t smnWritten;
     if ( threadIdx.x == 0 )
@@ -1626,7 +1626,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         cudaEventRecord( tGpu0 );
     }
 
-    MirroredVector< intCUDA  > compactedPositions( nAllMonomers );
+    MirroredVector< intCUDA  > compactedPositions( mPolymerSystemSorted->nElements );
     MirroredVector< uint32_t > nRemainingPerBlock( nAllMonomers );
     MirroredVector< uint32_t > originalIds       ( nAllMonomers );
 
@@ -1661,14 +1661,19 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mLatticeOut->texture,
                 nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu
             );
-
+            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
             if ( iStep <= 2 )
             {
-                compactedPositions.pop();
-                std::cout << "Prefixes calculated inside first block at step " << iStep << ":";
-                for ( auto i = 0u; i < mnThreads; ++i )
-                    std::cout << ( i % 32 /* warpSize */ == 0 ? "\n" : " " ) << compactedPositions.host[i];
+                nRemainingPerBlock.pop();
+                std::cout << "Remaining monomers per each of the " << nBlocks << " blocks a " << mnThreads << " threads at step " << iStep << " substep " << iSubStep << ":";
+                for ( auto i = 0u; i < nBlocks; ++i )
+                    std::cout << ( i % 16 == 0 ? "\n" : " " ) << std::setw(3) << nRemainingPerBlock.host[i];
                 std::cout << std::endl;
+                /* Calculate statistics from that */
+                auto nRemaining = 0ul;
+                for ( auto i = 0u; i < nBlocks; ++i )
+                    nRemaining += nRemainingPerBlock.host[i];
+                std::cout << "Remaining particles in total: " << nRemaining << " / " << mnElementsInGroup[ iSpecies ] << " (" << nRemaining * 100.f / mnElementsInGroup[ iSpecies ] << "%)\n";
             }
 
             if ( mLog.isActive( "Stats" ) )
@@ -1695,6 +1700,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->texture, mLatticeOut->gpu
             );
+            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
 
             if ( mLog.isActive( "Stats" ) )
             {
@@ -1717,6 +1723,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu
             );
+            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
 
             if ( mLog.isActive( "Stats" ) )
             {

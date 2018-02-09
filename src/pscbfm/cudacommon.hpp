@@ -243,6 +243,8 @@ __device__ inline ulong4 operator+( ulong4 const & x, ulong4 const & y ) {
 
 
 #ifdef __CUDACC__
+#if ! defined( __CUDA_ARCH__ ) || __CUDA_ARCH__ >= 300
+
 /**
  * Reduces a value inside each warp who calls this function recursively
  * and the thread with lane ID 0 will have the result. Actually all threads
@@ -269,13 +271,12 @@ __device__ inline ulong4 operator+( ulong4 const & x, ulong4 const & y ) {
  * @endverbatim
  * @see https://devblogs.nvidia.com/faster-parallel-reductions-kepler/
  */
-#if ! defined( __CUDA_ARCH__ ) || __CUDA_ARCH__ >= 300
 template< typename T > __inline__ __device__
 T warpReduceSum( T x )
 {
 #if 0
     #pragma unroll
-    for ( int delta = warpSize >> 1; delta > 0; delta <<= 1 )
+    for ( int delta = warpSize >> 1; delta > 0; delta >>= 1 )
         x += __shfl_down( x, delta );
 #else
     assert( warpSize == 32 );
@@ -287,7 +288,23 @@ T warpReduceSum( T x )
 #endif
     return x;
 }
+
+T warpAllReduceSum( T x )
+{
+#if 0
+    #pragma unroll
+    for ( int mask = warpSize >> 1; mask > 0; mask >>= 1 )
+        x += __shfl_xor( x, mask );
+#else
+    assert( warpSize == 32 );
+    x += __shfl_xor( x, 16 );
+    x += __shfl_xor( x,  8 );
+    x += __shfl_xor( x,  4 );
+    x += __shfl_xor( x,  2 );
+    x += __shfl_xor( x,  1 );
 #endif
+    return x;
+}
 
 /**
  * Similar to warpReduceSum, but actually returns the cumulative sum
@@ -350,7 +367,6 @@ T warpReduceSum( T x )
 template< typename T > __device__ inline
 T warpReduceCumSum( T x )
 {
-#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ >= 300
     /* todo */
     assert( warpSize == 32 );
     /* first calculate y_i = \sum_{k=0}^{2^i}  x_i */
@@ -388,9 +404,6 @@ T warpReduceCumSum( T x )
         dx = __shfl( x, 15, 32 ); if ( laneId & 16 ) x += dx;
     #endif
 #endif
-#else
-    assert( false && "Need __shfl_down and therefore Kepler (compute capability 3.0) or higher" );
-#endif
     return x;
 }
 
@@ -398,7 +411,6 @@ T warpReduceCumSum( T x )
  * same as warpReduceCumSum, but only can input bool, not a 32-bit number
  * __popc returns int @see http://docs.nvidia.com/cuda/cuda-math-api/group__CUDA__MATH__INTRINSIC__INT.html#group__CUDA__MATH__INTRINSIC__INT_1g43c9c7d2b9ebf202ff1ef5769989be46
  */
-#if ! defined( __CUDA_ARCH__ ) || ( __CUDA_ARCH__ >= 300 && __CUDA_ARCH__ < 1000 )
 __device__ inline int warpReduceCumSumPredicate( bool const x )
 {
     /* __ballot deprecated since CUDA 9 sets laneId-th bit set, i.e. lower are
@@ -408,7 +420,6 @@ __device__ inline int warpReduceCumSumPredicate( bool const x )
     auto const mask = ( 2u << laneId ) - 1u; // will even wark for laneId 31, reslting in 0-1=-1
     return __popc( __ballot(x) & mask );
 }
-#endif
 
 /**
  * return type is int, because that's the return type for popc
@@ -495,19 +506,18 @@ __device__ inline int blockReduceSum( int const x, int * const smBuffer )
     auto const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == 0 )
         smBuffer[ iSubarray ] = sum;
+    __syncthreads();
     if ( threadIdx.x < warpSize )
     {
-        __syncthreads();
         auto const globalSum = warpReduceSum( smBuffer[ threadIdx.x ] );
         __syncthreads();
         smBuffer[ threadIdx.x ] = globalSum;
     }
     __syncthreads();
-    if ( iSubarray > 0 )
-        sum += smBuffer[ iSubarray-1 ];
-    __syncthreads();
+    // only threadIdx.x == 0 has the correct value!
     return sum;
 }
+#endif // __CUDA_ARCH__ >= 300
 
 #endif // __CUDACC__
 
