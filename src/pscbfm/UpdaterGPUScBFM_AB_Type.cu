@@ -41,6 +41,7 @@ __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbid
 __device__ __constant__ uint32_t DXTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 __device__ __constant__ uint32_t DYTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 __device__ __constant__ uint32_t DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint3 dcDrTable[6];
 /**
  * If intCUDA is different from uint32_t, then this second table prevents
  * expensive type conversions, but both tables are still needed, the
@@ -58,8 +59,11 @@ __device__ __constant__ intCUDA DZTableIntCUDA_d[6];
 __device__ __constant__ uint32_t dcBoxXM1   ;  // mLattice size in X-1
 __device__ __constant__ uint32_t dcBoxYM1   ;  // mLattice size in Y-1
 __device__ __constant__ uint32_t dcBoxZM1   ;  // mLattice size in Z-1
+__device__ __constant__ uint32_t dcBoxRangeMaskU32[3];
+
 __device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
 __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
+__device__ __constant__ uint32_t dcnBitsSkipBoxCoordinate[3];
 
 
 /* Since CUDA 5.5 (~2014) there do exist texture objects which are much
@@ -361,101 +365,69 @@ __device__ inline bool checkFront
         #undef TMP_FETCH
     }
 #else
+    auto const a0 = axis >> 1;
+    auto a1 = a0 + 1; if ( a1 == 3 ) a1 = 0;
+    auto a2 = a1 + 1; if ( a2 == 3 ) a2 = 0;
+    uint32_t const r0[3] = { x0, y0, z0 };
+
     #if defined( USE_ZCURVE_FOR_LATTICE )
-        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
-        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
-        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
-        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
-        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
-        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
-        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
-        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
-        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
+        uint32_t const xa1[] = {
+            diluteBits< uint32_t, 2 >( ( r0[ a1 ]               ) & dcBoxRangeMaskU32[ a1 ] ) << a1,
+            diluteBits< uint32_t, 2 >( ( r0[ a1 ] + uint32_t(1) ) & dcBoxRangeMaskU32[ a1 ] ) << a1,
+            diluteBits< uint32_t, 2 >( ( r0[ a1 ] - uint32_t(1) ) & dcBoxRangeMaskU32[ a1 ] ) << a1
+        };
+        uint32_t const xa2[] = {
+            diluteBits< uint32_t, 2 >( ( r0[ a2 ]               ) & dcBoxRangeMaskU32[ a2 ] ) << a2,
+            diluteBits< uint32_t, 2 >( ( r0[ a2 ] + uint32_t(1) ) & dcBoxRangeMaskU32[ a2 ] ) << a2,
+            diluteBits< uint32_t, 2 >( ( r0[ a2 ] - uint32_t(1) ) & dcBoxRangeMaskU32[ a2 ] ) << a2
+        };
     #else
-        auto const x0Abs  =   ( x0               ) & dcBoxXM1;
-        auto const x0PDX  =   ( x0 + uint32_t(1) ) & dcBoxXM1;
-        auto const x0MDX  =   ( x0 - uint32_t(1) ) & dcBoxXM1;
-        auto const y0Abs  = ( ( y0               ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const y0PDY  = ( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const y0MDY  = ( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const z0Abs  = ( ( z0               ) & dcBoxZM1 ) << dcBoxXYLog2;
-        auto const z0PDZ  = ( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
-        auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const xa1[] = {
+            ( ( r0[ a1 ]               ) & dcBoxRangeMask[ a1 ] ) << dcnBitsSkipBoxCoordinate[ a1 ],
+            ( ( r0[ a1 ] + uint32_t(1) ) & dcBoxRangeMask[ a1 ] ) << dcnBitsSkipBoxCoordinate[ a1 ],
+            ( ( r0[ a1 ] - uint32_t(1) ) & dcBoxRangeMask[ a1 ] ) << dcnBitsSkipBoxCoordinate[ a1 ]
+        };
+        auto const xa2[] = {
+            ( ( r0[ a2 ]               ) & dcBoxRangeMask[ a2 ] ) << dcnBitsSkipBoxCoordinate[ a2 ],
+            ( ( r0[ a2 ] + uint32_t(1) ) & dcBoxRangeMask[ a2 ] ) << dcnBitsSkipBoxCoordinate[ a2 ],
+            ( ( r0[ a2 ] - uint32_t(1) ) & dcBoxRangeMask[ a2 ] ) << dcnBitsSkipBoxCoordinate[ a2 ]
+        };
     #endif
 
-    auto const dx = DXTable_d[ axis ];   // 2*axis-1
-    auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
-    auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
-
+    auto const dr = dcDrTable[ axis ];
     uint32_t is[9];
 
     #if defined( USE_ZCURVE_FOR_LATTICE )
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
-            case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
+            case 0: is[7] = ( x0 + 2u * dr.x ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + 2u * dr.y ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + 2u * dr.z ) & dcBoxZM1; break;
         }
         is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
     #else
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] =   ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
-            case 2: is[7] = ( ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+            case 0: is[7] =   ( x0 + 2u * dr.x ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + 2u * dr.y ) & dcBoxYM1 ) << dcnBitsSkipBoxCoordinate[ a0 ]; break;
+            case 2: is[7] = ( ( z0 + 2u * dr.z ) & dcBoxZM1 ) << dcnBitsSkipBoxCoordinate[ a0 ]; break;
         }
+        // is[7] = ( ( r0[a0] + 2u * dr[a0] ) & dcBoxZM1 ) << dcnBitsSkipBoxCoordinate[ a0 ];
     #endif
-    switch ( axis >> intCUDA(1) )
-    {
-        case 0: //-+x
-        {
-            is[2]  = is[7] | z0Abs;
-            is[5]  = is[7] | z0MDZ;
-            is[8]  = is[7] | z0PDZ;
-            is[0]  = is[2] | y0MDY;
-            is[1]  = is[2] | y0Abs;
-            is[2] |=         y0PDY;
-            is[3]  = is[5] | y0MDY;
-            is[4]  = is[5] | y0Abs;
-            is[5] |=         y0PDY;
-            is[6]  = is[8] | y0MDY;
-            is[7]  = is[8] | y0Abs;
-            is[8] |=         y0PDY;
-            break;
-        }
-        case 1: //-+y
-        {
-            is[2]  = is[7] | z0MDZ;
-            is[5]  = is[7] | z0Abs;
-            is[8]  = is[7] | z0PDZ;
-            is[0]  = is[2] | x0MDX;
-            is[1]  = is[2] | x0Abs;
-            is[2] |=         x0PDX;
-            is[3]  = is[5] | x0MDX;
-            is[4]  = is[5] | x0Abs;
-            is[5] |=         x0PDX;
-            is[6]  = is[8] | x0MDX;
-            is[7]  = is[8] | x0Abs;
-            is[8] |=         x0PDX;
-            break;
-        }
-        case 2: //-+z
-        {
-            is[2]  = is[7] | y0MDY;
-            is[5]  = is[7] | y0Abs;
-            is[8]  = is[7] | y0PDY;
-            is[0]  = is[2] | x0MDX;
-            is[1]  = is[2] | x0Abs;
-            is[2] |=         x0PDX;
-            is[3]  = is[5] | x0MDX;
-            is[4]  = is[5] | x0Abs;
-            is[5] |=         x0PDX;
-            is[6]  = is[8] | x0MDX;
-            is[7]  = is[8] | x0Abs;
-            is[8] |=         x0PDX;
-            break;
-        }
-    }
+
+    is[2]  = is[7] | xa1[0];
+    is[5]  = is[7] | xa1[1];
+    is[8]  = is[7] | xa1[2];
+    is[0]  = is[2] | xa2[0];
+    is[1]  = is[2] | xa2[1];
+    is[2] |=         xa2[2];
+    is[3]  = is[5] | xa2[0];
+    is[4]  = is[5] | xa2[1];
+    is[5] |=         xa2[2];
+    is[6]  = is[8] | xa2[0];
+    is[7]  = is[8] | xa2[1];
+    is[8] |=         xa2[2];
+
     bool const isOccupied = tex1Dfetch< uint8_t >( texLattice, is[0] ) |
                             tex1Dfetch< uint8_t >( texLattice, is[1] ) |
                             tex1Dfetch< uint8_t >( texLattice, is[2] ) |
@@ -886,20 +858,43 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     CUDA_ERROR( cudaMemcpyToSymbol( dpForbiddenBonds, tmpForbiddenBonds, sizeof(bool)*512 ) );
     free( tmpForbiddenBonds );
 
-    /* create a table mapping the random int to directions whereto move the
-     * monomers. We can use negative numbers, because (0u-1u)+1u still is 0u */
-    uint32_t tmp_DXTable[6] = { 0u-1u,1,  0,0,  0,0 };
-    uint32_t tmp_DYTable[6] = {  0,0, 0u-1u,1,  0,0 };
-    uint32_t tmp_DZTable[6] = {  0,0,  0,0, 0u-1u,1 };
-    CUDA_ERROR( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( tmp_DXTable ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( tmp_DXTable ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( tmp_DXTable ) ) );
-    intCUDA tmp_DXTableIntCUDA[6] = { -1,1,  0,0,  0,0 };
-    intCUDA tmp_DYTableIntCUDA[6] = {  0,0, -1,1,  0,0 };
-    intCUDA tmp_DZTableIntCUDA[6] = {  0,0,  0,0, -1,1 };
-    CUDA_ERROR( cudaMemcpyToSymbol( DXTableIntCUDA_d, tmp_DXTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( DYTableIntCUDA_d, tmp_DYTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( DZTableIntCUDA_d, tmp_DZTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+    /* initialize GPU constant memory values */
+    {
+        uint32_t const boxRangeMaskU32[3] = { uint32_t( mBoxXM1 ), uint32_t( mBoxYM1 ), uint32_t( mBoxZM1 ) };
+        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxRangeMaskU32, &boxRangeMaskU32, sizeof( boxRangeMaskU32 ) ) );
+
+        uint32_t const nBitsSkipBoxCoordinate[3] = { 0, mBoxXLog2, mBoxXYLog2 };
+        CUDA_ERROR( cudaMemcpyToSymbol( dcnBitsSkipBoxCoordinate, &nBitsSkipBoxCoordinate, sizeof( nBitsSkipBoxCoordinate ) ) );
+
+        /* create a table mapping the random int to directions whereto move the
+         * monomers. We can use negative numbers, because (0u-1u)+1u still is 0u */
+        uint32_t const m1 = uint32_t(0) - uint32_t(1);
+        typename CudaVec3< uint32_t >::value_type drTableU32[6] = {
+            { m1,0,0 }, { 1u,0,0 },
+            { 0,m1,0 }, { 0,1u,0 },
+            { 0,0,m1 }, { 0,0,1u }
+        };
+        CUDA_ERROR( cudaMemcpyToSymbol( dcDrTable, drTableU32, sizeof( drTableU32 ) ) );
+
+        uint32_t tmp_DXTable[6] = { 0u-1u,1,  0,0,  0,0 };
+        uint32_t tmp_DYTable[6] = {  0,0, 0u-1u,1,  0,0 };
+        uint32_t tmp_DZTable[6] = {  0,0,  0,0, 0u-1u,1 };
+        CUDA_ERROR( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( tmp_DXTable ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( tmp_DXTable ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( tmp_DXTable ) ) );
+        intCUDA tmp_DXTableIntCUDA[6] = { -1,1,  0,0,  0,0 };
+        intCUDA tmp_DYTableIntCUDA[6] = {  0,0, -1,1,  0,0 };
+        intCUDA tmp_DZTableIntCUDA[6] = {  0,0,  0,0, -1,1 };
+        CUDA_ERROR( cudaMemcpyToSymbol( DXTableIntCUDA_d, tmp_DXTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( DYTableIntCUDA_d, tmp_DYTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( DZTableIntCUDA_d, tmp_DZTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+
+        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &mBoxXM1   , sizeof( mBoxXM1    ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &mBoxYM1   , sizeof( mBoxYM1    ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &mBoxZM1   , sizeof( mBoxZM1    ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
+        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
+    }
 
     /*************************** start of grouping ***************************/
 
@@ -1147,12 +1142,6 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     checkSystem();
 
     /* creating lattice */
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &mBoxXM1   , sizeof( mBoxXM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &mBoxYM1   , sizeof( mBoxYM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &mBoxZM1   , sizeof( mBoxZM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
-
     mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     CUDA_ERROR( cudaMemsetAsync( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream ) );
