@@ -528,7 +528,6 @@ using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
     intCUDA     const * const __restrict__ dpPolymerSystem         ,
-    T_Flags           *       __restrict__ dpPolymerFlags          ,
     uint32_t            const              iOffset                 ,
     uint8_t           * const __restrict__ dpLatticeTmp            ,
     uint32_t    const * const __restrict__ dpNeighbors             ,
@@ -566,9 +565,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
         if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
             rn = hash( hash( iMonomer ) ^ rSeed );
-
         T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
-        T_Flags properties = 0;
 
          /* select random direction. Do this with bitmasking instead of lookup ??? */
         /* int4 const dr = { DXTable_d[ direction ],
@@ -608,7 +605,6 @@ __global__ void kernelSimulationScBFMCheckSpecies
                  * texture used above. Won't this result in read-after-write race-conditions?
                  * Then again the written / changed bits are never used in the above code ... */
                 mightMove = true;
-                properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
                 dpLatticeTmp[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
             }
     #ifdef NONPERIODICITY
@@ -665,7 +661,6 @@ __global__ void kernelSimulationScBFMCheckSpecies
 __global__ void kernelCountFilteredCheck
 (
     intCUDA          const * const __restrict__ dpPolymerSystem        ,
-    T_Flags          const * const __restrict__ /* dpPolymerFlags */   ,
     uint32_t                 const              iOffset                ,
     uint8_t          const * const __restrict__ /* dpLatticeTmp */     ,
     uint32_t         const * const __restrict__ dpNeighbors            ,
@@ -729,13 +724,9 @@ __global__ void kernelCountFilteredCheck
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    intCUDA       const * const __restrict__ dpPolymerSystem         ,
-    T_Flags             * const __restrict__ dpPolymerFlags          ,
     uint8_t             * const __restrict__ dpLattice               ,
-    uint32_t              const              nTotalMonomers          ,
     cudaTextureObject_t   const              texLatticeTmp           ,
     uint32_t            * const __restrict__ dpnRemainingPerBlock    ,
-    uint32_t      const *       __restrict__ dpOriginalIds           ,
     intCUDA       const *       __restrict__ dpCompactedPolymerSystem,
     T_Flags             *       __restrict__ dpCompactedFlags        ,
     int                   const              nPitchCompacted
@@ -754,7 +745,6 @@ __global__ void kernelSimulationScBFMPerformSpecies
 
     auto const offsetThisBlock = blockIdx.x * nPitchCompacted;
     dpCompactedPolymerSystem += offsetThisBlock * 3;
-    dpOriginalIds            += offsetThisBlock;
     dpCompactedFlags         += offsetThisBlock;
 
     for ( auto iMonomerCompacted = threadIdx.x; iMonomerCompacted < nMonomers;
@@ -822,13 +812,11 @@ __global__ void kernelCountFilteredPerform
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
     intCUDA             * const __restrict__ dpPolymerSystem         ,
-    T_Flags       const * const __restrict__ dpPolymerFlags          ,
     uint8_t             * const __restrict__ dpLatticeTmp            ,
-    uint32_t              const              nTotalMonomers          ,
     uint32_t            * const __restrict__ dpnRemainingPerBlock    ,
     uint32_t      const *       __restrict__ dpOriginalIds           ,
     intCUDA       const *       __restrict__ dpCompactedPolymerSystem,
-    T_Flags             *       __restrict__ dpCompactedFlags        ,
+    T_Flags       const *       __restrict__ dpCompactedFlags        ,
     int                   const              nPitchCompacted
 )
 {
@@ -1676,7 +1664,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             kernelSimulationScBFMCheckSpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu,
-                mPolymerFlags->gpu,
                 iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu,
                 mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
@@ -1717,7 +1704,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 kernelCountFilteredCheck
                 <<< nBlocks, mnThreads, 0, mStream >>>(
                     mPolymerSystemSorted->gpu,
-                    mPolymerFlags->gpu,
                     iSubGroupOffset[ iSpecies ],
                     mLatticeTmp->gpu,
                     mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
@@ -1731,12 +1717,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMPerformSpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
-                mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
-                mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeOut->gpu,
-                mnElementsInGroup[ iSpecies ],
                 mLatticeTmp->texture,
-                nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, compactedFlags.gpu, nPitchCompacted
+                nRemainingPerBlock.gpu, compactedPositions.gpu, compactedFlags.gpu, nPitchCompacted
             );
 
             if ( mLog.isActive( "Stats" ) )
@@ -1755,9 +1738,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             kernelSimulationScBFMZeroArraySpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
-                mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                 mLatticeTmp->gpu,
-                mnElementsInGroup[ iSpecies ],
                 nRemainingPerBlock.gpu, originalIds.gpu, compactedPositions.gpu, compactedFlags.gpu, nPitchCompacted
             );
 
