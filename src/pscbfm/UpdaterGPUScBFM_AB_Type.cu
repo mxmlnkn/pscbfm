@@ -33,28 +33,33 @@ __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbid
 
 /**
  * These will be initialized to:
- *   drTable = { {-1,0,0}, {1,0,0}, {0,-1,0}, {0,1,0}, {0,0,-1}, {0,0,1} };
- * If intCUDA is different from uint32_t, then the second table prevents
+ *   DXTable_d = { -1,1,0,0,0,0 }
+ *   DYTable_d = { 0,0,-1,1,0,0 }
+ *   DZTable_d = { 0,0,0,0,-1,1 }
+ * I.e. a table of three random directional 3D vectors \vec{dr} = (dx,dy,dz)
+ */
+__device__ __constant__ uint32_t DXTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DYTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+/**
+ * If intCUDA is different from uint32_t, then this second table prevents
  * expensive type conversions, but both tables are still needed, the
  * uint32_t version, because the calculation of the linear index will result
  * in uint32_t anyway and the intCUDA version for solely updating the
  * position information
  */
-__device__ __constant__ typename CudaVec3< uint32_t >::value_type dcDrTableU32    [6];
-__device__ __constant__ typename CudaVec3< intCUDA  >::value_type dcDrTableIntCuda[6];
+__device__ __constant__ intCUDA DXTableIntCUDA_d[6];
+__device__ __constant__ intCUDA DYTableIntCUDA_d[6];
+__device__ __constant__ intCUDA DZTableIntCUDA_d[6];
 
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
  * the same constant */
-__device__ __constant__ uint32_t dcBoxRangeMaskU32    [3];
-__device__ __constant__ intCUDA  dcBoxRangeMaskIntCuda[3];
-
-/**
- * stores the number of bits we need to shift in order to safely store
- * all coordinates into one uint32_t, i.e. it will contain:
- *     { 0, Log2( boxSizeX ), Log2( boxSizeX * boxSizeY ) }
- */
-__device__ __constant__ uint32_t dcnBitsSkipBoxCoordinate[3];
+__device__ __constant__ uint32_t dcBoxXM1   ;  // mLattice size in X-1
+__device__ __constant__ uint32_t dcBoxYM1   ;  // mLattice size in Y-1
+__device__ __constant__ uint32_t dcBoxZM1   ;  // mLattice size in Z-1
+__device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
+__device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
 
 
 /* Since CUDA 5.5 (~2014) there do exist texture objects which are much
@@ -217,18 +222,18 @@ __device__ inline uint32_t linearizeBoxVectorIndex
 )
 {
     #if defined ( USE_ZCURVE_FOR_LATTICE )
-        return   diluteBits< uint32_t, 2 >( ix & dcBoxRangeMaskU32[0] )        |
-               ( diluteBits< uint32_t, 2 >( iy & dcBoxRangeMaskU32[1] ) << 1 ) |
-               ( diluteBits< uint32_t, 2 >( iz & dcBoxRangeMaskU32[2] ) << 2 );
+        return   diluteBits< uint32_t, 2 >( ix & dcBoxXM1 )        |
+               ( diluteBits< uint32_t, 2 >( iy & dcBoxYM1 ) << 1 ) |
+               ( diluteBits< uint32_t, 2 >( iz & dcBoxZM1 ) << 2 );
     #else
         #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
-            assert( isPowerOfTwo( dcBoxRangeMaskU32[0] + 1 ) );
-            assert( isPowerOfTwo( dcBoxRangeMaskU32[1] + 1 ) );
-            assert( isPowerOfTwo( dcBoxRangeMaskU32[2] + 1 ) );
+            assert( isPowerOfTwo( dcBoxXM1 + 1 ) );
+            assert( isPowerOfTwo( dcBoxYM1 + 1 ) );
+            assert( isPowerOfTwo( dcBoxZM1 + 1 ) );
         #endif
-        return   ( ix & dcBoxRangeMaskU32[0] ) +
-               ( ( iy & dcBoxRangeMaskU32[1] ) << dcBoxXLog2  ) +
-               ( ( iz & dcBoxRangeMaskU32[2] ) << dcBoxXYLog2 );
+        return   ( ix & dcBoxXM1 ) +
+               ( ( iy & dcBoxYM1 ) << dcBoxXLog2  ) +
+               ( ( iz & dcBoxZM1 ) << dcBoxXYLog2 );
     #endif
 }
 
@@ -357,45 +362,47 @@ __device__ inline bool checkFront
     }
 #else
     #if defined( USE_ZCURVE_FOR_LATTICE )
-        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxRangeMaskU32[0] );
-        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxRangeMaskU32[0] );
-        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxRangeMaskU32[0] );
-        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxRangeMaskU32[1] ) << 1;
-        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxRangeMaskU32[1] ) << 1;
-        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxRangeMaskU32[1] ) << 1;
-        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxRangeMaskU32[2] ) << 2;
-        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxRangeMaskU32[2] ) << 2;
-        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxRangeMaskU32[2] ) << 2;
+        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
+        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
+        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
+        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
+        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
+        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
+        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
     #else
-        auto const x0Abs  =   ( x0               ) & dcBoxRangeMaskU32[0];
-        auto const x0PDX  =   ( x0 + uint32_t(1) ) & dcBoxRangeMaskU32[1];
-        auto const x0MDX  =   ( x0 - uint32_t(1) ) & dcBoxRangeMaskU32[2];
-        auto const y0Abs  = ( ( y0               ) & dcBoxRangeMaskU32[2] ) << dcnBitsSkipBoxCoordinate[1];
-        auto const y0PDY  = ( ( y0 + uint32_t(1) ) & dcBoxRangeMaskU32[2] ) << dcnBitsSkipBoxCoordinate[1];
-        auto const y0MDY  = ( ( y0 - uint32_t(1) ) & dcBoxRangeMaskU32[2] ) << dcnBitsSkipBoxCoordinate[1];
-        auto const z0Abs  = ( ( z0               ) & dcBoxRangeMaskU32[3] ) << dcnBitsSkipBoxCoordinate[2];
-        auto const z0PDZ  = ( ( z0 + uint32_t(1) ) & dcBoxRangeMaskU32[3] ) << dcnBitsSkipBoxCoordinate[2];
-        auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxRangeMaskU32[3] ) << dcnBitsSkipBoxCoordinate[2];
+        auto const x0Abs  =   ( x0               ) & dcBoxXM1;
+        auto const x0PDX  =   ( x0 + uint32_t(1) ) & dcBoxXM1;
+        auto const x0MDX  =   ( x0 - uint32_t(1) ) & dcBoxXM1;
+        auto const y0Abs  = ( ( y0               ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0PDY  = ( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0MDY  = ( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const z0Abs  = ( ( z0               ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0PDZ  = ( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
     #endif
 
-    auto const dr = dcDrTableU32[ axis ];
+    auto const dx = DXTable_d[ axis ];   // 2*axis-1
+    auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
+    auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
 
     uint32_t is[9];
 
     #if defined( USE_ZCURVE_FOR_LATTICE )
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] = ( x0 + decltype(dr.x)(2) * dr.x ) & dcBoxRangeMaskU32[0]; break;
-            case 1: is[7] = ( y0 + decltype(dr.y)(2) * dr.y ) & dcBoxRangeMaskU32[1]; break;
-            case 2: is[7] = ( z0 + decltype(dr.z)(2) * dr.z ) & dcBoxRangeMaskU32[2]; break;
+            case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
         }
         is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
     #else
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] =   ( x0 + decltype(dr.x)(2) * dr.x ) & dcBoxRangeMaskU32[0]; break;
-            case 1: is[7] = ( ( y0 + decltype(dr.y)(2) * dr.y ) & dcBoxRangeMaskU32[1] ) << dcnBitsSkipBoxCoordinate[1]; break;
-            case 2: is[7] = ( ( z0 + decltype(dr.z)(2) * dr.z ) & dcBoxRangeMaskU32[2] ) << dcnBitsSkipBoxCoordinate[2]; break;
+            case 0: is[7] =   ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
         }
     #endif
     switch ( axis >> intCUDA(1) )
@@ -550,16 +557,16 @@ __global__ void kernelSimulationScBFMCheckSpecies
         /* int4 const dr = { DXTable_d[ direction ],
                           DYTable_d[ direction ],
                           DZTable_d[ direction ], 0 }; */
-        uint3 const r1 = { r0.x + dcDrTableU32[ direction ].x,
-                           r0.y + dcDrTableU32[ direction ].y,
-                           r0.z + dcDrTableU32[ direction ].z };
+        uint3 const r1 = { r0.x + DXTable_d[ direction ],
+                           r0.y + DYTable_d[ direction ],
+                           r0.z + DZTable_d[ direction ] };
 
     #ifdef NONPERIODICITY
        /* check whether the new location of the particle would be inside the box
         * if the box is not periodic, if not, then don't move the particle */
-        if ( uint32_t(0) <= r1.x && r1.x < dcBoxRangeMaskU32[0] &&
-             uint32_t(0) <= r1.y && r1.y < dcBoxRangeMaskU32[1] &&
-             uint32_t(0) <= r1.z && r1.z < dcBoxRangeMaskU32[2]    )
+        if ( uint32_t(0) <= r1.x && r1.x < dcBoxXM1 &&
+             uint32_t(0) <= r1.y && r1.y < dcBoxYM1 &&
+             uint32_t(0) <= r1.z && r1.z < dcBoxZM1    )
         {
     #endif
             /* check whether the new position would result in invalid bonds
@@ -618,14 +625,14 @@ __global__ void kernelCountFilteredCheck
             rn = hash( hash( iMonomer ) ^ rSeed );
         T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
 
-        uint3 const r1 = { r0.x + dcDrTableU32[ direction ].x,
-                           r0.y + dcDrTableU32[ direction ].y,
-                           r0.z + dcDrTableU32[ direction ].z };
+        uint3 const r1 = { r0.x + DXTable_d[ direction ],
+                           r0.y + DYTable_d[ direction ],
+                           r0.z + DZTable_d[ direction ] };
 
     #ifdef NONPERIODICITY
-        if ( uint32_t(0) <= r1.x && r1.x < dcBoxRangeMaskU32[0] &&
-             uint32_t(0) <= r1.y && r1.y < dcBoxRangeMaskU32[1] &&
-             uint32_t(0) <= r1.z && r1.z < dcBoxRangeMaskU32[2]    )
+        if ( uint32_t(0) <= r1.x && r1.x < dcBoxXM1 &&
+             uint32_t(0) <= r1.y && r1.y < dcBoxYM1 &&
+             uint32_t(0) <= r1.z && r1.z < dcBoxZM1    )
         {
     #endif
             auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
@@ -685,9 +692,9 @@ __global__ void kernelSimulationScBFMPerformSpecies
         /* If possible, perform move now on normal lattice */
         dpPolymerFlags[ iMonomer ] = properties | T_Flags(2); // indicating allowed move
         dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
-        dpLattice[ linearizeBoxVectorIndex( r0.x + dcDrTableU32[ direction ].x,
-                                            r0.y + dcDrTableU32[ direction ].y,
-                                            r0.z + dcDrTableU32[ direction ].z ) ] = 1;
+        dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
+                                            r0.y + DYTable_d[ direction ],
+                                            r0.z + DZTable_d[ direction ] ) ] = 1;
         /* We can't clean the temporary lattice in here, because it still is being
          * used for checks. For cleaning we need only the new positions.
          * But we can't use the applied positions, because we also need to clean
@@ -753,9 +760,9 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         auto r0 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
 
-        r0.x += dcDrTableIntCuda[ direction ].x;
-        r0.y += dcDrTableIntCuda[ direction ].y;
-        r0.z += dcDrTableIntCuda[ direction ].z;
+        r0.x += DXTableIntCUDA_d[ direction ];
+        r0.y += DYTableIntCUDA_d[ direction ];
+        r0.z += DZTableIntCUDA_d[ direction ];
         dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
         if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
             ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
@@ -879,33 +886,20 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     CUDA_ERROR( cudaMemcpyToSymbol( dpForbiddenBonds, tmpForbiddenBonds, sizeof(bool)*512 ) );
     free( tmpForbiddenBonds );
 
-    /* initialize GPU constant memory values */
-    {
-        uint32_t const boxRangeMaskU32    [3] = { uint32_t( mBoxXM1 ), uint32_t( mBoxYM1 ), uint32_t( mBoxZM1 ) };
-        intCUDA  const boxRangeMaskIntCuda[3] = { intCUDA ( mBoxXM1 ), intCUDA ( mBoxYM1 ), intCUDA ( mBoxZM1 ) };
-        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxRangeMaskU32    , &boxRangeMaskU32    , sizeof( boxRangeMaskU32     ) ) );
-        CUDA_ERROR( cudaMemcpyToSymbol( dcBoxRangeMaskIntCuda, &boxRangeMaskIntCuda, sizeof( boxRangeMaskIntCuda ) ) );
-
-        uint32_t const nBitsSkipBoxCoordinate[3] = { 0, mBoxXLog2, mBoxXYLog2 };
-        CUDA_ERROR( cudaMemcpyToSymbol( dcnBitsSkipBoxCoordinate, &nBitsSkipBoxCoordinate, sizeof( nBitsSkipBoxCoordinate ) ) );
-
-        /* create a table mapping the random int to directions whereto move the
-         * monomers. We can use negative numbers, because (0u-1u)+1u still is 0u */
-        uint32_t const m1 = uint32_t(0) - uint32_t(1);
-        typename CudaVec3< uint32_t >::value_type drTableU32[6] = {
-            { m1,0,0 }, { 1u,0,0 },
-            { 0,m1,0 }, { 0,1u,0 },
-            { 0,0,m1 }, { 0,0,1u }
-        };
-        intCUDA im1 = intCUDA(0) - intCUDA(1);
-        typename CudaVec3< intCUDA  >::value_type drTableIntCuda[6] = {
-            { im1,0,0 }, { 1u,0,0 },
-            { 0,im1,0 }, { 0,1u,0 },
-            { 0,0,im1 }, { 0,0,1u }
-        };
-        CUDA_ERROR( cudaMemcpyToSymbol( dcDrTableU32    , drTableU32    , sizeof( drTableU32     ) ) );
-        CUDA_ERROR( cudaMemcpyToSymbol( dcDrTableIntCuda, drTableIntCuda, sizeof( drTableIntCuda ) ) );
-    }
+    /* create a table mapping the random int to directions whereto move the
+     * monomers. We can use negative numbers, because (0u-1u)+1u still is 0u */
+    uint32_t tmp_DXTable[6] = { 0u-1u,1,  0,0,  0,0 };
+    uint32_t tmp_DYTable[6] = {  0,0, 0u-1u,1,  0,0 };
+    uint32_t tmp_DZTable[6] = {  0,0,  0,0, 0u-1u,1 };
+    CUDA_ERROR( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( tmp_DXTable ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( tmp_DXTable ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( tmp_DXTable ) ) );
+    intCUDA tmp_DXTableIntCUDA[6] = { -1,1,  0,0,  0,0 };
+    intCUDA tmp_DYTableIntCUDA[6] = {  0,0, -1,1,  0,0 };
+    intCUDA tmp_DZTableIntCUDA[6] = {  0,0,  0,0, -1,1 };
+    CUDA_ERROR( cudaMemcpyToSymbol( DXTableIntCUDA_d, tmp_DXTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DYTableIntCUDA_d, tmp_DYTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DZTableIntCUDA_d, tmp_DZTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
 
     /*************************** start of grouping ***************************/
 
@@ -1153,6 +1147,12 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     checkSystem();
 
     /* creating lattice */
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &mBoxXM1   , sizeof( mBoxXM1    ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &mBoxYM1   , sizeof( mBoxYM1    ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &mBoxZM1   , sizeof( mBoxZM1    ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
+
     mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     CUDA_ERROR( cudaMemsetAsync( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream ) );
