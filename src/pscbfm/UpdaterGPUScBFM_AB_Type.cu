@@ -589,7 +589,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
                 /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
                  * texture used above. Won't this result in read-after-write race-conditions?
                  * Then again the written / changed bits are never used in the above code ... */
-                properties = direction + T_Flags(8) /* can-move-flag */;
+                properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
                 dpLatticeTmp[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
             }
     #ifdef NONPERIODICITY
@@ -680,17 +680,17 @@ __global__ void kernelSimulationScBFMPerformSpecies
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iMonomer ];
-        if ( ( properties & T_Flags(8) ) == T_Flags(0) )    // impossible move
+        if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
             continue;
 
         auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
         //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // slower
-        auto const direction = properties & T_Flags(7); // 7=0b111
+        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
         if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
             continue;
 
         /* If possible, perform move now on normal lattice */
-        dpPolymerFlags[ iMonomer ] = properties | T_Flags(16); // indicating allowed move
+        dpPolymerFlags[ iMonomer ] = properties | T_Flags(2); // indicating allowed move
         dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
         dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
                                             r0.y + DYTable_d[ direction ],
@@ -717,7 +717,7 @@ __global__ void kernelCountFilteredPerform
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iMonomer ];
-        if ( ( properties & T_Flags(8) ) == T_Flags(0) )    // impossible move
+        if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
             continue;
 
         auto const data = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
@@ -754,17 +754,17 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iMonomer ];
-        if ( ( properties & T_Flags(24) ) == T_Flags(0) )    // impossible move
+        if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
             continue;
 
         auto r0 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
-        auto const direction = properties & T_Flags(7); // 7=0b111
+        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
 
         r0.x += DXTableIntCUDA_d[ direction ];
         r0.y += DYTableIntCUDA_d[ direction ];
         r0.z += DZTableIntCUDA_d[ direction ];
         dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
-        if ( properties & T_Flags(16) )  // 3=0b11
+        if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
             ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
     }
 }
