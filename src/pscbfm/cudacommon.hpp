@@ -70,10 +70,10 @@ template<> struct CudaVec4To3< CUDATYPENAME##4 >{ typedef CUDATYPENAME##3 value_
 #define TMP_CUDAVECS_UI( ELEMENTTYPE, CUDATYPENAME ) \
 TMP_CUDAVECS( u##ELEMENTTYPE, u##CUDATYPENAME ) \
 TMP_CUDAVECS( ELEMENTTYPE, CUDATYPENAME )
-TMP_CUDAVECS( int8_t , char  )
-TMP_CUDAVECS( int16_t, short )
-TMP_CUDAVECS( int32_t, int   )
-TMP_CUDAVECS( int64_t, long  )
+TMP_CUDAVECS_UI( int8_t , char  )
+TMP_CUDAVECS_UI( int16_t, short )
+TMP_CUDAVECS_UI( int32_t, int   )
+TMP_CUDAVECS_UI( int64_t, long  )
 #undef TMP_CUDAVECS
 #undef TMP_CUDAVECS_UI
 
