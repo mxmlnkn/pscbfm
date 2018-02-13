@@ -151,11 +151,8 @@ struct DiluteBitsCrumble { __device__ __host__ inline static T apply( T const & 
 } };
 
 template< typename T, unsigned char nSpacing, unsigned char nStepsNeeded >
-struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> { __device__ __host__ inline static T apply( T const & x )
-{
-    auto constexpr nBitsAllowed = 1 + ( sizeof(T) * CHAR_BIT - 1 ) / ( nSpacing + 1 );
-    return x & BitPatterns::Ones< T, nBitsAllowed >::value;
-} };
+struct DiluteBitsCrumble<T,nSpacing,nStepsNeeded,0> {
+__device__ __host__ inline static T apply( T const & x ) { return x; } };
 
 template< typename T, unsigned char nSpacing >
 __device__ __host__ inline T diluteBits( T const & rx )
@@ -1151,7 +1148,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     auto const nMonomersPadded = nAllMonomers + ( nElementsAlignment - 1u ) * mnElementsInGroup.size();
     assert( mPolymerFlags == NULL );
     mPolymerFlags = new MirroredVector< T_Flags >( nMonomersPadded, mStream );
-    CUDA_ERROR( cudaMemset( mPolymerFlags->gpu, 0, mPolymerFlags->nBytes ) );
+    CUDA_ERROR( cudaMemsetAsync( mPolymerFlags->gpu, 0, mPolymerFlags->nBytes, mStream ) );
     /* Calculate offsets / prefix sum including the alignment */
     assert( mPolymerSystemSorted == NULL );
     mPolymerSystemSorted = new MirroredVector< intCUDA >( 3u * nMonomersPadded, mStream );
