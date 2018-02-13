@@ -292,10 +292,6 @@ private:
 
     int            miGpuToUse;
     cudaDeviceProp mCudaProps;
-    /* more threads should be bette for block-wise stream compaction, but might
-     * worsen other effects ... */
-    static long int const   mnThreads = 128;
-    std::vector< long int > mnBlocksForGroup;
 
     /**
      * If we constrict each index to 1024=2^10 which already is quite large,

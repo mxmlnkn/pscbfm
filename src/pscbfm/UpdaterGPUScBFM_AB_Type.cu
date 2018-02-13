@@ -8,10 +8,10 @@
 #include "UpdaterGPUScBFM_AB_Type.h"
 
 
-#define USE_CUDA_MEMSET
 //#define USE_THRUST_FILL
 #define USE_BIT_PACKING_TMP_LATTICE
 //#define USE_BIT_PACKING_LATTICE
+//#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
 
 
 #include <algorithm>                        // fill, sort
@@ -846,7 +846,6 @@ __global__ void kernelSimulationScBFMPerformSpecies
     }
 }
 
-#ifdef USE_CUDA_MEMSET
 __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 (
     intCUDA       const * const __restrict__ dpPolymerSystem,
@@ -879,7 +878,6 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
         ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r1;
     }
 }
-#endif
 
 __global__ void kernelCountFilteredPerform
 (
@@ -941,7 +939,11 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         r0.x += DXTableIntCUDA_d[ direction ];
         r0.y += DYTableIntCUDA_d[ direction ];
         r0.z += DZTableIntCUDA_d[ direction ];
+    #ifdef USE_BIT_PACKING_TMP_LATTICE
         dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
+    #else
+        bitPackedUnset( dpLatticeTmp, linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) );
+    #endif
         if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
             ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
     }
@@ -1359,24 +1361,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         << "=> " << 100. * nAllMonomers / ( mBoxX * mBoxY * mBoxZ ) << "%\n"
         << "Note: densest packing is: 25% -> in this case it might be more reasonable to actually iterate over the spaces where particles can move to, keeping track of them instead of iterating over the particles\n";
 
-    /* calculate kernel configurations */
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
     CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
-    mnBlocksForGroup.resize( mnElementsInGroup.size(), 0 );
-    for ( size_t i = 0u; i < mnBlocksForGroup.size(); ++i )
-    {
-        auto const nConcThreads = mCudaProps.maxThreadsPerMultiProcessor
-                                * mCudaProps.multiProcessorCount;
-        mnBlocksForGroup[i] = ceilDiv( mnElementsInGroup[i], mnThreads ); /*std::min< size_t >(
-            ceilDiv( nConcThreads, mnThreads ),
-            ceilDiv( mnElementsInGroup[i], mnThreads )
-        );*/
-
-        mLog( "Info" )
-        << "Will start kernels for species " << char( 'A' + i )
-        << " with " << mnBlocksForGroup[i] << " blocks with each "
-        << mnThreads << " threads\n";
-    }
 }
 
 
@@ -1706,6 +1692,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 {
     std::clock_t const t0 = std::clock();
 
+    auto const nSpecies = mnElementsInGroup.size();
+
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
      *   0: bonds, 1: volume exclusion, 2: volume exclusion (parallel)
@@ -1717,24 +1705,66 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     auto constexpr nFilters = 5;
     if ( mLog.isActive( "Stats" ) )
     {
-        auto const nGroups = mnElementsInGroup.size();
-        sums .resize( nGroups, std::vector< double >( nFilters, 0            ) );
-        sums2.resize( nGroups, std::vector< double >( nFilters, 0            ) );
-        mins .resize( nGroups, std::vector< double >( nFilters, nAllMonomers ) );
-        maxs .resize( nGroups, std::vector< double >( nFilters, 0            ) );
-        ns   .resize( nGroups, std::vector< double >( nFilters, 0            ) );
+        sums .resize( nSpecies, std::vector< double >( nFilters, 0            ) );
+        sums2.resize( nSpecies, std::vector< double >( nFilters, 0            ) );
+        mins .resize( nSpecies, std::vector< double >( nFilters, nAllMonomers ) );
+        maxs .resize( nSpecies, std::vector< double >( nFilters, 0            ) );
+        ns   .resize( nSpecies, std::vector< double >( nFilters, 0            ) );
         /* ns needed because we need to know how often each group was advanced */
         vFiltered.resize( nFilters );
         CUDA_ERROR( cudaMalloc( &dpFiltered, nFilters * sizeof( *dpFiltered ) ) );
         CUDA_ERROR( cudaMemsetAsync( (void*) dpFiltered, 0, nFilters * sizeof( *dpFiltered ), mStream ) );
     }
 
+    /**
+     * Logic for determining the best threadsPerBlock configuration
+     *
+     * This might be dependent on the species, therefore for each species
+     * store the current best thread count and all timings.
+     * As the cudaEventSynchronize timings are expensive, stop benchmarking
+     * after having found the best configuration.
+     * Only try out power two multiples of warpSize up to maxThreadsPerBlock,
+     * e.g. 32, 64, 128, 256, 512, 1024, because smaller than warp size
+     * should never lead to a speedup and non power of twos, e.g. 196 even,
+     * won't be able to perfectly fill out the shared multi processor.
+     * Also, automatically determine whether cudaMemset is faster or not (after
+     * we found the best threads per block configuration
+     * note: test example best configuration was 128 threads per block and use
+     *       the cudaMemset version instead of the third kernel
+     */
+    std::vector< int > vnThreadsToTry;
+    for ( auto nThreads = mCudaProps.warpSize; nThreads <= mCudaProps.maxThreadsPerBlock; nThreads *= 2 )
+        vnThreadsToTry.push_back( nThreads );
+    assert( vnThreadsToTry.size() > 0 );
+    struct SpeciesBenchmarkData
+    {
+        /* 2 vectors of double for measurements with and without cudaMemset */
+        std::vector< std::vector< float > > timings;
+        int iBestThreadCount;
+        bool useCudaMemset;
+        bool decidedAboutThreadCount;
+        bool decidedAboutCudaMemset;
+    };
+    std::vector< SpeciesBenchmarkData > benchmarkInfo( nSpecies, SpeciesBenchmarkData{
+        std::vector< std::vector< float > >( 2 /* true or false */,
+            std::vector< float >( vnThreadsToTry.size(),
+                std::numeric_limits< float >::infinity() ) ),
+#ifdef AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
+        0, true, vnThreadsToTry.size() <= 1, false
+#else
+        2, true, true, true
+#endif
+    } );
+    cudaEvent_t tOneGpuLoop0, tOneGpuLoop1;
+    cudaEventCreate( &tOneGpuLoop0 );
+    cudaEventCreate( &tOneGpuLoop1 );
+
     cudaEvent_t tGpu0, tGpu1;
     if ( mLog.isActive( "Benchmark" ) )
     {
         cudaEventCreate( &tGpu0 );
         cudaEventCreate( &tGpu1 );
-        cudaEventRecord( tGpu0 );
+        cudaEventRecord( tGpu0, mStream );
     }
 
     /* run simulation */
@@ -1743,12 +1773,19 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         /* one Monte-Carlo step:
          *  - tries to move on average all particles one time
          *  - each particle could be touched, not just one group */
-        for ( uint32_t iSubStep = 0; iSubStep < mnElementsInGroup.size(); ++iSubStep )
+        for ( uint32_t iSubStep = 0; iSubStep < nSpecies; ++iSubStep )
         {
             /* randomly choose which monomer group to advance */
-            auto const iSpecies = randomNumbers.r250_rand32() % mnElementsInGroup.size();
+            auto const iSpecies = randomNumbers.r250_rand32() % nSpecies;
             auto const seed     = randomNumbers.r250_rand32();
-            auto const nBlocks  = mnBlocksForGroup.at( iSpecies );
+            auto const nThreads = vnThreadsToTry.at( benchmarkInfo[ iSpecies ].iBestThreadCount );
+            auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
+            auto const needToBenchmark = ! (
+                benchmarkInfo[ iSpecies ].decidedAboutThreadCount &&
+                benchmarkInfo[ iSpecies ].decidedAboutCudaMemset );
+            auto const useCudaMemset = benchmarkInfo[ iSpecies ].useCudaMemset;
+            if ( needToBenchmark )
+                cudaEventRecord( tOneGpuLoop0, mStream );
 
             /*
             if ( iStep < 3 )
@@ -1756,7 +1793,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             */
 
             kernelSimulationScBFMCheckSpecies
-            <<< nBlocks, mnThreads, 0, mStream >>>(
+            <<< nBlocks, nThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu,
                 mPolymerFlags->gpu,
                 iSubGroupOffset[ iSpecies ],
@@ -1771,7 +1808,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             if ( mLog.isActive( "Stats" ) )
             {
                 kernelCountFilteredCheck
-                <<< nBlocks, mnThreads, 0, mStream >>>(
+                <<< nBlocks, nThreads, 0, mStream >>>(
                     mPolymerSystemSorted->gpu,
                     mPolymerFlags->gpu,
                     iSubGroupOffset[ iSpecies ],
@@ -1784,23 +1821,33 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     dpFiltered
                 );
             }
-        #ifdef USE_CUDA_MEMSET
-            kernelSimulationScBFMPerformSpeciesAndApply
-        #else
-            kernelSimulationScBFMPerformSpecies
-        #endif
-            <<< nBlocks, mnThreads, 0, mStream >>>(
-                mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
-                mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
-                mLatticeOut->gpu,
-                mnElementsInGroup[ iSpecies ],
-                mLatticeTmp->texture
-            );
+            if ( useCudaMemset )
+            {
+                kernelSimulationScBFMPerformSpeciesAndApply
+                <<< nBlocks, nThreads, 0, mStream >>>(
+                    mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
+                    mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
+                    mLatticeOut->gpu,
+                    mnElementsInGroup[ iSpecies ],
+                    mLatticeTmp->texture
+                );
+            }
+            else
+            {
+                kernelSimulationScBFMPerformSpecies
+                <<< nBlocks, nThreads, 0, mStream >>>(
+                    mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
+                    mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
+                    mLatticeOut->gpu,
+                    mnElementsInGroup[ iSpecies ],
+                    mLatticeTmp->texture
+                );
+            }
 
             if ( mLog.isActive( "Stats" ) )
             {
                 kernelCountFilteredPerform
-                <<< nBlocks, mnThreads, 0, mStream >>>(
+                <<< nBlocks, nThreads, 0, mStream >>>(
                     mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeOut->gpu,
@@ -1810,24 +1857,93 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 );
             }
 
-        #ifdef USE_CUDA_MEMSET
-            #ifdef USE_BIT_PACKING_TMP_LATTICE
-                cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes / CHAR_BIT, mStream );
-            #else
-                cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream );
-            #endif
-        #elif USE_THRUST_FILL
-            thrust::fill( thrust::system::cuda::par, (uint64_t*)  mLatticeTmp->gpu,
-                          (uint64_t*)( mLatticeTmp->gpu + mLatticeTmp->nElements ), 0 );
-        #else
-            kernelSimulationScBFMZeroArraySpecies
-            <<< nBlocks, mnThreads, 0, mStream >>>(
-                mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
-                mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
-                mLatticeTmp->gpu,
-                mnElementsInGroup[ iSpecies ]
-            );
-        #endif
+            if ( useCudaMemset )
+            {
+                #ifdef USE_THRUST_FILL
+                    thrust::fill( thrust::system::cuda::par, (uint64_t*)  mLatticeTmp->gpu,
+                                  (uint64_t*)( mLatticeTmp->gpu + mLatticeTmp->nElements ), 0 );
+                #else
+                    #ifdef USE_BIT_PACKING_TMP_LATTICE
+                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes / CHAR_BIT, mStream );
+                    #else
+                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream );
+                    #endif
+                #endif
+            }
+            else
+            {
+                kernelSimulationScBFMZeroArraySpecies
+                <<< nBlocks, nThreads, 0, mStream >>>(
+                    mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
+                    mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
+                    mLatticeTmp->gpu,
+                    mnElementsInGroup[ iSpecies ]
+                );
+            }
+
+            if ( needToBenchmark )
+            {
+                auto & info = benchmarkInfo[ iSpecies ];
+                cudaEventRecord( tOneGpuLoop1, mStream );
+                cudaEventSynchronize( tOneGpuLoop1 );
+                float milliseconds = 0;
+                cudaEventElapsedTime( & milliseconds, tOneGpuLoop0, tOneGpuLoop1 );
+                auto const iThreadCount = info.iBestThreadCount;
+                info.timings.at( useCudaMemset ).at( iThreadCount ) = milliseconds;
+
+                mLog( "Info" )
+                << "Using " << nThreads << " threads (" << nBlocks << " blocks)"
+                << " and using " << ( useCudaMemset ? "cudaMemset" : "kernelZeroArray" )
+                << " for species " << iSpecies << " took " << milliseconds << "ms\n";
+
+                if ( ! info.decidedAboutThreadCount )
+                {
+                    /* if not the first timing, then decide whether we got slower,
+                     * i.e. whether we found the minimum in the last step and
+                     * have to roll back */
+                    if ( iThreadCount > 0 )
+                    {
+                        if ( info.timings.at( useCudaMemset ).at( iThreadCount-1 ) < milliseconds )
+                        {
+                            --info.iBestThreadCount;
+                            info.decidedAboutThreadCount = true;
+                        }
+                        else
+                            ++info.iBestThreadCount;
+                    }
+                    else
+                        ++info.iBestThreadCount;
+                    /* if we can't increment anymore, then we are finished */
+                    assert( info.iBestThreadCount <= vnThreadsToTry.size() );
+                    if ( info.iBestThreadCount == vnThreadsToTry.size() )
+                    {
+                        --info.iBestThreadCount;
+                        info.decidedAboutThreadCount = true;
+                    }
+                    if ( info.decidedAboutThreadCount )
+                    {
+                        /* then in the next term try out changing cudaMemset
+                         * version to custom kernel version (or vice-versa) */
+                        info.useCudaMemset = ! info.useCudaMemset;
+                        mLog( "Info" )
+                        << "Using " << vnThreadsToTry.at( info.iBestThreadCount )
+                        << " threads per block is the fastest for species "
+                        << iSpecies << ".\n";
+                    }
+                }
+                else if ( ! info.decidedAboutCudaMemset )
+                {
+                    info.decidedAboutCudaMemset = true;
+                    if ( info.timings.at( ! useCudaMemset ).at( iThreadCount ) < milliseconds )
+                        info.useCudaMemset = ! useCudaMemset;
+                    if ( info.decidedAboutCudaMemset )
+                    {
+                        mLog( "Info" )
+                        << "Using " << ( info.useCudaMemset ? "cudaMemset" : "kernelZeroArray" )
+                        << " is the fastest for species " << iSpecies << ".\n";
+                    }
+                }
+            }
 
             if ( mLog.isActive( "Stats" ) )
             {
@@ -1846,13 +1962,13 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     ns   .at( iSpecies ).at( iFilter ) += 1;
                 }
             }
-        }
-    }
+        } // iSubstep
+    } // iStep
 
     if ( mLog.isActive( "Benchmark" ) )
     {
         // https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/#disqus_thread
-        cudaEventRecord( tGpu1 );
+        cudaEventRecord( tGpu1, mStream );
         cudaEventSynchronize( tGpu1 );  // basically a StreamSynchronize
         float milliseconds = 0;
         cudaEventElapsedTime( & milliseconds, tGpu0, tGpu1 );
