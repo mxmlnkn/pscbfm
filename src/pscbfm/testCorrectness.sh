@@ -133,6 +133,8 @@ checkSc()
               -DCUDA_ARCH:STRING="$arch"  \
               -DBUILD_BENCHMARKS=$( if [ "${name#benchmark-}" != "$name" ]; then echo ON; else echo OFF; fi ) \
               -DPULL_LEMONADE=ON .. || return 1
+        # make gpuinfo to determine on which GPU to run. Don't need to force-build
+        $csrun make VERBOSE=1 --output-sync -j $( nproc --all ) gpuinfo || return 1
         # forcing make with -B might be useful in order to save output of nvcc --res-usage into logs
         # without VERBOSE=1 the output of -res-usage becomes useless as it isn't known from which compilation it came from
         # but for the benchmark script a -B would result remaking all exes and then each time running only one of them ...
