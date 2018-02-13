@@ -6,7 +6,13 @@
  */
 
 #include "UpdaterGPUScBFM_AB_Type.h"
-#include "graphColoring.tpp"
+
+
+//#define USE_CUDA_MEMSET
+//#define USE_THRUST_FILL
+//#define USE_BIT_PACKING_TMP_LATTICE
+//#define USE_BIT_PACKING_LATTICE
+
 
 #include <algorithm>                        // fill, sort
 #include <chrono>                           // std::chrono::high_resolution_clock
@@ -19,14 +25,21 @@
 #include <stdint.h>
 #include <sstream>
 
+#ifdef USE_THRUST_FILL
+#   include <thrust/system/cuda/execution_policy.h>
+#   include <thrust/fill.h>
+#endif
+
 #include "Fundamental/BitsCompileTime.hpp"
 
 #include "cudacommon.hpp"
 #include "SelectiveLogger.hpp"
+#include "graphColoring.tpp"
 
 #define DEBUG_UPDATERGPUSCBFM_AB_TYPE 100
-
-
+#if defined( USE_BIT_PACKING_TMP_LATTICE ) || defined( USE_BIT_PACKING_LATTICE )
+#   define USE_BIT_PACKING
+#endif
 
 /* 512=8^3 for a range of bonds per direction of [-4,3] */
 __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbidden
@@ -236,6 +249,67 @@ __device__ inline uint32_t linearizeBoxVectorIndex
                ( ( iz & dcBoxZM1 ) << dcBoxXYLog2 );
     #endif
 }
+
+#define USE_BIT_PACKING
+#ifdef USE_BIT_PACKING
+    template< typename T > __device__ __host__ inline
+    T bitPackedGet( T const * const & p, uint32_t const & i )
+    {
+        /**
+         * >> 3, because 3 bits = 2^3=8 numbers are used for sub-byte indexing,
+         * i.e. we divide the index i by 8 which is equal to the space we save
+         * by bitpacking.
+         * & 7, because 7 = 0b111, i.e. we are only interested in the last 3
+         * bits specifying which subbyte element we want
+         */
+        return ( p[ i >> 3 ] >> ( i & T(7) ) ) & T(1);
+    }
+
+    template< typename T > __device__ inline
+    T bitPackedTextureGet( cudaTextureObject_t const & p, uint32_t const & i )
+    {
+        return ( tex1Dfetch<T>( p, i >> 3 ) >> ( i & T(7) ) ) & T(1);
+    }
+
+    /**
+     * Because the smalles atomic is for int (4x uint8_t) we need to
+     * cast the array to that and then do a bitpacking for the whole 32 bits
+     * instead of 8 bits
+     * I.e. we need to address 32 subbits, i.e. >>3 becomes >>5
+     * and &7 becomes &31 = 0b11111 = 0x1F
+     */
+    template< typename T > __device__ __host__ inline
+    void bitPackedSet( T * const __restrict__ p, uint32_t const & i )
+    {
+        static_assert( sizeof(int) == 4, "" );
+        #ifdef __CUDA_ARCH__
+            atomicOr ( (int*) p + ( i >> 5 ),    T(1) << ( i & T( 0x1F ) )   );
+        #else
+            p[ i >> 3 ] |= T(1) << ( i & T(7) );
+        #endif
+    }
+
+    template< typename T > __device__ __host__ inline
+    void bitPackedUnset( T * const __restrict__ p, uint32_t const & i )
+    {
+        #ifdef __CUDA_ARCH__
+            atomicAnd( (int*) p + ( i >> 5 ), ~( T(1) << ( i & T( 0x1F ) ) ) );
+        #else
+            p[ i >> 3 ] &= ~( T(1) << ( i & T(7) ) );
+        #endif
+    }
+#else
+    template< typename T > __device__ __host__ inline
+    T bitPackedGet( T const * const & p, uint32_t const & i ){ return p[i]; }
+    template< typename T > __device__ inline
+    T bitPackedTextureGet( cudaTextureObject_t const & p, uint32_t const & i ) {
+        return tex1Dfetch<T>(p,i); }
+    template< typename T > __device__ __host__ inline
+    void bitPackedSet  ( T * const __restrict__ p, uint32_t const & i ){ p[i] = 1; }
+    template< typename T > __device__ __host__ inline
+    void bitPackedUnset( T * const __restrict__ p, uint32_t const & i ){ p[i] = 0; }
+#endif
+
 
 /**
  * Checks the 3x3 grid one in front of the new position in the direction of the
@@ -469,6 +543,71 @@ __device__ inline bool checkFront
     return isOccupied;
 }
 
+#ifdef USE_BIT_PACKING
+__device__ inline bool checkFrontBitPacked
+(
+    cudaTextureObject_t const & texLattice,
+    uint32_t            const & x0        ,
+    uint32_t            const & y0        ,
+    uint32_t            const & z0        ,
+    intCUDA             const & axis
+)
+{
+    auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
+    auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
+    auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
+    auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
+    auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
+    auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
+    auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
+    auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
+    auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
+
+    auto const dx = DXTable_d[ axis ];   // 2*axis-1
+    auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
+    auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
+
+    uint32_t is[9];
+    switch ( axis >> intCUDA(1) )
+    {
+        case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+        case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
+        case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
+    }
+    is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
+    switch ( axis >> intCUDA(1) )
+    {
+        case 0: //-+x
+            is[2]  = is[7] | z0Abs; is[5]  = is[7] | z0MDZ; is[8]  = is[7] | z0PDZ;
+            is[0]  = is[2] | y0MDY; is[1]  = is[2] | y0Abs; is[2] |=         y0PDY;
+            is[3]  = is[5] | y0MDY; is[4]  = is[5] | y0Abs; is[5] |=         y0PDY;
+            is[6]  = is[8] | y0MDY; is[7]  = is[8] | y0Abs; is[8] |=         y0PDY;
+            break;
+        case 1: //-+y
+            is[2]  = is[7] | z0MDZ; is[5]  = is[7] | z0Abs; is[8]  = is[7] | z0PDZ;
+            is[0]  = is[2] | x0MDX; is[1]  = is[2] | x0Abs; is[2] |=         x0PDX;
+            is[3]  = is[5] | x0MDX; is[4]  = is[5] | x0Abs; is[5] |=         x0PDX;
+            is[6]  = is[8] | x0MDX; is[7]  = is[8] | x0Abs; is[8] |=         x0PDX;
+            break;
+        case 2: //-+z
+            is[2]  = is[7] | y0MDY; is[5]  = is[7] | y0Abs; is[8]  = is[7] | y0PDY;
+            is[0]  = is[2] | x0MDX; is[1]  = is[2] | x0Abs; is[2] |=         x0PDX;
+            is[3]  = is[5] | x0MDX; is[4]  = is[5] | x0Abs; is[5] |=         x0PDX;
+            is[6]  = is[8] | x0MDX; is[7]  = is[8] | x0Abs; is[8] |=         x0PDX;
+            break;
+    }
+    return bitPackedTextureGet< uint8_t >( texLattice, is[0] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[2] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[7] ) |
+           bitPackedTextureGet< uint8_t >( texLattice, is[8] );
+}
+#endif
+
 __device__ __host__ inline uintCUDA linearizeBondVectorIndex
 (
     intCUDA const x,
@@ -590,7 +729,11 @@ __global__ void kernelSimulationScBFMCheckSpecies
                  * texture used above. Won't this result in read-after-write race-conditions?
                  * Then again the written / changed bits are never used in the above code ... */
                 properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
+            #ifdef USE_BIT_PACKING_TMP_LATTICE
+                bitPackedSet( dpLatticeTmp, linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) );
+            #else
                 dpLatticeTmp[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
+            #endif
             }
     #ifdef NONPERIODICITY
         }
@@ -702,6 +845,41 @@ __global__ void kernelSimulationScBFMPerformSpecies
          * still set in the lattice by the first kernel! */
     }
 }
+
+#ifdef USE_CUDA_MEMSET
+__global__ void kernelSimulationScBFMPerformSpeciesAndApply
+(
+    intCUDA       const * const __restrict__ dpPolymerSystem,
+    T_Flags             * const __restrict__ dpPolymerFlags ,
+    uint8_t             * const __restrict__ dpLattice      ,
+    uint32_t              const              nMonomers      ,
+    cudaTextureObject_t   const              texLatticeTmp
+)
+{
+    for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+          iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
+    {
+        auto const properties = dpPolymerFlags[ iMonomer ];
+        if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
+            continue;
+
+        auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+            continue;
+
+        CudaVec3< intCUDA >::value_type const r1 = {
+            intCUDA( r0.x + DXTableIntCUDA_d[ direction ] ),
+            intCUDA( r0.y + DYTableIntCUDA_d[ direction ] ),
+            intCUDA( r0.z + DZTableIntCUDA_d[ direction ] )
+        };
+        /* If possible, perform move now on normal lattice */
+        dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
+        dpLattice[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
+        ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r1;
+    }
+}
+#endif
 
 __global__ void kernelCountFilteredPerform
 (
@@ -1606,8 +1784,11 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     dpFiltered
                 );
             }
-
+        #ifdef USE_CUDA_MEMSET
+            kernelSimulationScBFMPerformSpeciesAndApply
+        #else
             kernelSimulationScBFMPerformSpecies
+        #endif
             <<< nBlocks, mnThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
                 mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
@@ -1629,6 +1810,16 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 );
             }
 
+        #ifdef USE_CUDA_MEMSET
+            #ifdef USE_BIT_PACKING_TMP_LATTICE
+                cudaMemset( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes / CHAR_BIT );
+            #else
+                cudaMemset( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes );
+            #endif
+        #elif USE_THRUST_FILL
+            thrust::fill( thrust::system::cuda::par, (uint64_t*)  mLatticeTmp->gpu,
+                          (uint64_t*)( mLatticeTmp->gpu + mLatticeTmp->nElements ), 0 );
+        #else
             kernelSimulationScBFMZeroArraySpecies
             <<< nBlocks, mnThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu + 3*iSubGroupOffset[ iSpecies ],
@@ -1636,6 +1827,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mLatticeTmp->gpu,
                 mnElementsInGroup[ iSpecies ]
             );
+        #endif
 
             if ( mLog.isActive( "Stats" ) )
             {

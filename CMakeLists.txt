@@ -146,6 +146,9 @@ add_executable( mainTestAll ${SOURCE_FILES} )
 target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
 find_package( CUDA REQUIRED )
+# Thrust throws tons of warnings -.-:
+# https://gitlab.kitware.com/cmake/cmake/issues/16464
+# include_directories( SYSTEM ${CUDA_INCLUDE_DIRS} ) does not work ...
 set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
 message( "CUDA_INCLUDE_DIR " )
 message( "Compile for sm_${CUDA_ARCH}" )
