@@ -11,7 +11,7 @@
 //#define USE_THRUST_FILL
 #define USE_BIT_PACKING_TMP_LATTICE
 //#define USE_BIT_PACKING_LATTICE
-//#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
+#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
 
 
 #include <algorithm>                        // fill, sort
@@ -277,6 +277,8 @@ __device__ inline uint32_t linearizeBoxVectorIndex
      * instead of 8 bits
      * I.e. we need to address 32 subbits, i.e. >>3 becomes >>5
      * and &7 becomes &31 = 0b11111 = 0x1F
+     * __host__ __device__ function with differing code
+     * @see https://codeyarns.com/2011/03/14/cuda-common-function-for-both-host-and-device-code/
      */
     template< typename T > __device__ __host__ inline
     void bitPackedSet( T * const __restrict__ p, uint32_t const & i )
@@ -829,7 +831,11 @@ __global__ void kernelSimulationScBFMPerformSpecies
         auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
         //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // slower
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+    #ifdef USE_BIT_PACKING_TMP_LATTICE
+        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+    #else
         if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+    #endif
             continue;
 
         /* If possible, perform move now on normal lattice */
@@ -864,7 +870,11 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 
         auto const r0 = ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+    #ifdef USE_BIT_PACKING_TMP_LATTICE
         if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+    #else
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+    #endif
             continue;
 
         CudaVec3< intCUDA >::value_type const r1 = {
@@ -940,9 +950,10 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         r0.y += DYTableIntCUDA_d[ direction ];
         r0.z += DZTableIntCUDA_d[ direction ];
     #ifdef USE_BIT_PACKING_TMP_LATTICE
-        dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
+        //bitPackedUnset( dpLatticeTmp, linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) );
+        dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) >> 3 ] = 0;
     #else
-        bitPackedUnset( dpLatticeTmp, linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) );
+        dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
     #endif
         if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
             ( (CudaVec3< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
@@ -1158,7 +1169,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     assert( mPolymerSystemSorted == NULL );
     mPolymerSystemSorted = new MirroredVector< intCUDA >( 3u * nMonomersPadded, mStream );
     #ifndef NDEBUG
-        std::memset( mPolymerSystemSorted.host, 0, mPolymerSystemSorted.nBytes );
+        std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
     #endif
 
     /* calculate offsets to each aligned subgroup vector */
@@ -1430,7 +1441,7 @@ void UpdaterGPUScBFM_AB_Type::setPeriodicity
 
 void UpdaterGPUScBFM_AB_Type::setAttribute( uint32_t i, int32_t attribute )
 {
-    #ifndef NDEBUG
+    #if ! defined( NDEBUG ) && false
         std::cerr << "[setAttribute] mAttributeSystem = " << (void*) mAttributeSystem << "\n";
         if ( mAttributeSystem == NULL )
             throw std::runtime_error( "[UpdaterGPUScBFM_AB_Type.h::setAttribute] mAttributeSystem is NULL! Did you call setNrOfAllMonomers, yet?" );
@@ -1740,6 +1751,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     {
         /* 2 vectors of double for measurements with and without cudaMemset */
         std::vector< std::vector< float > > timings;
+        std::vector< std::vector< int   > > nRepeatTimings;
         int iBestThreadCount;
         bool useCudaMemset;
         bool decidedAboutThreadCount;
@@ -1749,6 +1761,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         std::vector< std::vector< float > >( 2 /* true or false */,
             std::vector< float >( vnThreadsToTry.size(),
                 std::numeric_limits< float >::infinity() ) ),
+        std::vector< std::vector< int   > >( 2 /* true or false */,
+            std::vector< int   >( vnThreadsToTry.size(),
+            1 /* repeat 1 time, i.e. execute two times */ ) ),
 #ifdef AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
         0, true, vnThreadsToTry.size() <= 1, false
 #else
@@ -1821,6 +1836,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     dpFiltered
                 );
             }
+
             if ( useCudaMemset )
             {
                 kernelSimulationScBFMPerformSpeciesAndApply
@@ -1889,14 +1905,18 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 float milliseconds = 0;
                 cudaEventElapsedTime( & milliseconds, tOneGpuLoop0, tOneGpuLoop1 );
                 auto const iThreadCount = info.iBestThreadCount;
-                info.timings.at( useCudaMemset ).at( iThreadCount ) = milliseconds;
+                auto & oldTiming = info.timings.at( useCudaMemset ).at( iThreadCount );
+                oldTiming = std::min( oldTiming, milliseconds );
 
                 mLog( "Info" )
                 << "Using " << nThreads << " threads (" << nBlocks << " blocks)"
                 << " and using " << ( useCudaMemset ? "cudaMemset" : "kernelZeroArray" )
                 << " for species " << iSpecies << " took " << milliseconds << "ms\n";
 
-                if ( ! info.decidedAboutThreadCount )
+                auto & nStillToRepeat = info.nRepeatTimings.at( useCudaMemset ).at( iThreadCount );
+                if ( nStillToRepeat > 0 )
+                    --nStillToRepeat;
+                else if ( ! info.decidedAboutThreadCount )
                 {
                     /* if not the first timing, then decide whether we got slower,
                      * i.e. whether we found the minimum in the last step and
@@ -1914,8 +1934,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     else
                         ++info.iBestThreadCount;
                     /* if we can't increment anymore, then we are finished */
-                    assert( info.iBestThreadCount <= vnThreadsToTry.size() );
-                    if ( info.iBestThreadCount == vnThreadsToTry.size() )
+                    assert( (size_t) info.iBestThreadCount <= vnThreadsToTry.size() );
+                    if ( (size_t) info.iBestThreadCount == vnThreadsToTry.size() )
                     {
                         --info.iBestThreadCount;
                         info.decidedAboutThreadCount = true;
@@ -1924,7 +1944,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     {
                         /* then in the next term try out changing cudaMemset
                          * version to custom kernel version (or vice-versa) */
-                        info.useCudaMemset = ! info.useCudaMemset;
+                        if ( ! info.decidedAboutCudaMemset )
+                            info.useCudaMemset = ! info.useCudaMemset;
                         mLog( "Info" )
                         << "Using " << vnThreadsToTry.at( info.iBestThreadCount )
                         << " threads per block is the fastest for species "

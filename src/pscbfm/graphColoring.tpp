@@ -167,7 +167,7 @@ std::vector< T_Color > graphColoring
             long long int const cNoNode = -1;
             auto iFirstUncoloredNeighbor = cNoNode; // will be worked on next if there is one. Note that this can't be zero, because we started this loop by coloring node 0. This is the global monomer ID, not the ID inside the neighbor list!
             assert( iNodeIsolatedGraph >= 0 );
-            assert( iNodeIsolatedGraph < rnElements );
+            assert( (size_t) iNodeIsolatedGraph < rnElements );
             /* traverse over neighbors and check used colors */
             for ( size_t iNeighbor = 0; iNeighbor < rfGetNeighborsSize( rvNeighbors, iNodeIsolatedGraph ); ++iNeighbor )
             {
