@@ -8,9 +8,9 @@
 #include "UpdaterGPUScBFM_AB_Type.h"
 
 
-//#define USE_CUDA_MEMSET
+#define USE_CUDA_MEMSET
 //#define USE_THRUST_FILL
-//#define USE_BIT_PACKING_TMP_LATTICE
+#define USE_BIT_PACKING_TMP_LATTICE
 //#define USE_BIT_PACKING_LATTICE
 
 
@@ -1812,9 +1812,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
         #ifdef USE_CUDA_MEMSET
             #ifdef USE_BIT_PACKING_TMP_LATTICE
-                cudaMemset( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes / CHAR_BIT );
+                cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes / CHAR_BIT, mStream );
             #else
-                cudaMemset( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes );
+                cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream );
             #endif
         #elif USE_THRUST_FILL
             thrust::fill( thrust::system::cuda::par, (uint64_t*)  mLatticeTmp->gpu,
