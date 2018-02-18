@@ -139,7 +139,7 @@ link_directories   ( SYSTEM ${LEMONADE_LIBRARY_DIR} )
 
 file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
 add_executable( singleLinearChain ${SOURCE_FILES} )
-target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} )
+target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} cuda )
 
 file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
 add_executable( mainTestAll ${SOURCE_FILES} )
@@ -194,7 +194,7 @@ cuda_add_executable( ${BIN_NAME}
     src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
     src/pscbfm/mainCUDASimulatorGPUScBFM_AB_Type.cpp
 )
-target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} )
+target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} cuda )
 
 
 # Bcc BFM
@@ -207,14 +207,14 @@ target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} )
 
 # CLI for coloring a BFM file
 add_executable( colorBFM src/pscbfm/mainColorBFM.cpp )
-target_link_libraries( colorBFM ${LEMONADE_LIBRARY} )
+target_link_libraries( colorBFM ${LEMONADE_LIBRARY} cuda )
 
 
 # minimalistic gpuinfo tool printing all properties
 set_source_files_properties( src/gpuinfo.cpp PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
 set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} )
 cuda_add_executable( gpuinfo src/gpuinfo.cpp )
-target_link_libraries( gpuinfo )
+target_link_libraries( gpuinfo cuda )
 
 
 
@@ -249,6 +249,6 @@ if( BUILD_BENCHMARKS )
             "benchmarks/${subdir}/UpdaterGPUScBFM_AB_Type.cu"
             "benchmarks/${subdir}/mainCUDASimulatorGPUScBFM_AB_Type.cpp"
         )
-        target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} )
+        target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} cuda )
     endforeach()
 endif()

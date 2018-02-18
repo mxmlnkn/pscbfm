@@ -1,6 +1,6 @@
 /**
  * compile with:
- *   'nvcc' -ccbin=/usr/bin/g++-4.9 -std=c++11 --compiler-options -Wall,-Wextra -DCUDACOMMON_GPUINFO_MAIN -o gpuinfo --x cu cudacommon.hpp && ./gpuinfo
+ *   'nvcc' -ccbin=/usr/bin/g++-4.9 -std=c++11 --compiler-options -Wall,-Wextra -DCUDACOMMON_GPUINFO_MAIN -o gpuinfo --x cu cudacommon.hpp -lcuda && ./gpuinfo
  */
 
 #ifndef CUDACOMMON_GPUINFO_MAIN
@@ -17,6 +17,7 @@
 #include <sstream>
 #ifdef __CUDACC__
 #   include <cuda_runtime_api.h>
+#   include <cuda.h>                    // cuDeviceGetAttribute
 #endif
 
 
@@ -36,7 +37,7 @@ inline void checkCudaError
 {
     if ( rValue != cudaSuccess )
     {
-        std::cout << "CUDA error in " << file
+        std::cout << "CUDA error " << (int) rValue << " in " << file
                   << " line:" << line << " : "
                   << cudaGetErrorString( rValue ) << "\n";
         exit( EXIT_FAILURE );
@@ -372,12 +373,12 @@ T warpReduceCumSum( T x )
     assert( warpSize == 32 );
     /* first calculate y_i = \sum_{k=0}^{2^i}  x_i */
     /* & (32-1) -> laneID, not sure if faster than % warpSize */;
-    auto const laneId = threadIdx.x & 0x1F;
+    int const laneId = threadIdx.x & 0x1F;
 #if 0
     for ( int width = 1; width < warpSize; width <<= 1 )
     {
-        auto const srcId = ( laneId & ~( width-1 ) ) - 1;
-        auto const dx = __shfl( x, srcId );
+        int const srcId = ( laneId & ~( width-1 ) ) - 1;
+        int const dx = __shfl( x, srcId );
         if ( laneId % ( width * 2 ) >= width )
             x += dx;
     }
@@ -417,8 +418,8 @@ __device__ inline int warpReduceCumSumPredicate( bool const x )
     /* __ballot deprecated since CUDA 9 sets laneId-th bit set, i.e. lower are
      * to the "right" i.e. wil result in lower numbers */
     assert( warpSize == 32 );
-    auto const laneId = threadIdx.x & 0x1F; /* 32-1 -> laneID, not sure if faster than % warpSize */;
-    auto const mask = ( 2u << laneId ) - 1u; // will even wark for laneId 31, reslting in 0-1=-1
+    int const laneId = threadIdx.x & 0x1F; /* 32-1 -> laneID, not sure if faster than % warpSize */;
+    int const mask = ( 2u << laneId ) - 1u; // will even wark for laneId 31, reslting in 0-1=-1
     return __popc( __ballot(x) & mask );
 }
 
@@ -443,12 +444,12 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
     assert( threadIdx.z == 0 );
     assert( blockDim.x <= warpSize * warpSize );
     /* calculate cum sums per warp */
-    auto cumsum = warpReduceCumSumPredicate( x );
+    int cumsum = warpReduceCumSumPredicate( x );
     /* write all largest cumSums per warp, i.e. highest threadIdx / laneId
      * into __shared__ buffer. The highest thread doesn't need to store
      * its value, because noone needs to add it, this is useful, because
      * that allows calling this with some higher threadIds being filtered out */
-    auto const iSubarray = threadIdx.x / warpSize;
+    int const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == warpSize - 1 )
         smBuffer[ iSubarray ] = cumsum;
     /* the first warp now reduces these intermediary sums to another cumsum
@@ -462,7 +463,7 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
     if ( threadIdx.x < warpSize )
     {
         __syncthreads();
-        auto const globalCumSum = warpReduceCumSum( smBuffer[ threadIdx.x ] );
+        int const globalCumSum = warpReduceCumSum( smBuffer[ threadIdx.x ] );
         __syncthreads();
         smBuffer[ threadIdx.x ] = globalCumSum;
     }
@@ -494,8 +495,8 @@ __device__ inline int blockReduceCumSum( int const x, int * const smBuffer )
     assert( threadIdx.y == 0 );
     assert( threadIdx.z == 0 );
     assert( blockDim.x <= warpSize * warpSize );
-    auto cumsum = warpReduceCumSum( x );
-    auto const iSubarray = threadIdx.x / warpSize;
+    int cumsum = warpReduceCumSum( x );
+    int const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == warpSize - 1 )
         smBuffer[ iSubarray ] = cumsum;
     __syncthreads();
@@ -517,7 +518,7 @@ __device__ inline int blockReduceSumPredicate( bool const x, int * const smBuffe
     assert( threadIdx.y == 0 );
     assert( threadIdx.z == 0 );
     assert( blockDim.x <= warpSize * warpSize );
-    auto sum = warpReduceSumPredicate( x );
+    int sum = warpReduceSumPredicate( x );
     if ( threadIdx.x < warpSize )
         smBuffer[ threadIdx.x ] = 0;
     __syncthreads();
@@ -540,11 +541,11 @@ __device__ inline int blockReduceSum( int const x, int * const smBuffer )
     assert( threadIdx.y == 0 );
     assert( threadIdx.z == 0 );
     assert( blockDim.x <= warpSize * warpSize );
-    auto sum = warpReduceSum( x );
+    int sum = warpReduceSum( x );
     if ( threadIdx.x < warpSize )
         smBuffer[ threadIdx.x ] = 0;
     __syncthreads();
-    auto const iSubarray = threadIdx.x / warpSize;
+    int const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == 0 )
         smBuffer[ iSubarray ] = sum;
     __syncthreads();
@@ -675,10 +676,10 @@ inline void calcKernelConfig( int iDevice, uint64_t n, int * nBlocks, int * nThr
 }
 
 
-inline __device__ long long unsigned int getLinearThreadId( void )
+inline __device__ unsigned long long int getLinearThreadId( void )
 {
-    long long unsigned int i    = threadIdx.x;
-    long long unsigned int iMax = blockDim.x;
+    unsigned long long int i    = threadIdx.x;
+    unsigned long long int iMax = blockDim.x;
 
     i += threadIdx.y * iMax; iMax *= blockDim.y;
     i += threadIdx.z * iMax;
@@ -687,10 +688,10 @@ inline __device__ long long unsigned int getLinearThreadId( void )
     return i;
 }
 
-inline __device__ long long unsigned int getLinearGlobalId( void )
+inline __device__ unsigned long long int getLinearGlobalId( void )
 {
-    long long unsigned int i    = threadIdx.x;
-    long long unsigned int iMax = blockDim.x;
+    unsigned long long int i    = threadIdx.x;
+    unsigned long long int iMax = blockDim.x;
 
     i += threadIdx.y * iMax; iMax *= blockDim.y;
     i += threadIdx.z * iMax; iMax *= blockDim.z;
@@ -705,12 +706,12 @@ inline __device__ long long unsigned int getLinearGlobalId( void )
 
 inline __device__ void getLinearGlobalIdSize
 (
-    long long unsigned int * riThread,
-    long long unsigned int * rnThreads
+    unsigned long long int * riThread,
+    unsigned long long int * rnThreads
 )
 {
-    long long unsigned & i    = *riThread ;
-    long long unsigned & iMax = *rnThreads;
+    unsigned long long int & i    = *riThread ;
+    unsigned long long int & iMax = *rnThreads;
 
     i    = threadIdx.x;
     iMax = blockDim.x;
@@ -722,10 +723,10 @@ inline __device__ void getLinearGlobalIdSize
     i +=  blockIdx.z * iMax; iMax *= gridDim.z;
 }
 
-inline __device__ long long unsigned int getLinearBlockId( void )
+inline __device__ unsigned long long int getLinearBlockId( void )
 {
-    long long unsigned int i    = blockIdx.x;
-    long long unsigned int iMax = gridDim.x;
+    unsigned long long int i    = blockIdx.x;
+    unsigned long long int iMax = gridDim.x;
 
     i += blockIdx.y * iMax; iMax *= gridDim.y;
     i += blockIdx.z * iMax;
@@ -734,23 +735,54 @@ inline __device__ long long unsigned int getLinearBlockId( void )
     return i;
 }
 
-inline __device__ long long unsigned int getBlockSize( void )
+inline __device__ unsigned long long int getBlockSize( void )
 {
     return blockDim.x * blockDim.y * blockDim.z;
 }
 
-inline __device__ long long unsigned int getGridSize( void )
+inline __device__ unsigned long long int getGridSize( void )
 {
     return gridDim.x * gridDim.y * gridDim.z;
 }
 
-#endif
+#endif // __CUDACC__
 
 
 #include <cassert>
 #include <cstdio>               // printf, fflush
 #include <cstdlib>              // NULL, malloc, free
+#include <map>
 
+
+/**
+ * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
+ * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities
+ * @see https://devtalk.nvidia.com/default/topic/763273/peak-performance-of-integer-operation/
+ * "Multiple instructions" means there is no native instruction to perform that operation, and instead the compiler emits an instruction sequence to perform the operation. It is typically on the order of 5-50 instructions. This can vary from operation to operation, architecture to architecture, and even compiler version to compiler version. If you want to find out what it is for a specific case, create a small test code, compile it, and then dump the machine code using
+ *   cuobjdump -sass mycode
+ * 32-bit integer add is at approximately the same throughput as corresponding floating point operations for all architectures. So I guess your concern is primarily around the 32-bit integer multiply.
+ * => signaled here in the table with -1
+ * @see https://devtalk.nvidia.com/default/topic/948014/forward-looking-gpu-integer-performance/?offset=14
+ */
+static std::map< std::string, std::vector< int > > sCudaInstructionThroughput =
+{
+                 /* 3.0 & 3.2, 3.5 & 3.7, 5.0 & 5.2, 5.3, 6.0, 6.1, 6.2, 7.0 */
+    { "hpfpfma"    , {   0,   0,   0, 256, 128,   2, 256, 128 } },
+    { "spfpfma"    , { 192, 192, 128, 128,  64, 128, 128,  64 } },
+    { "dpfpfma"    , {   8,  64,   4,   4,  32,   4,   4,  32 } },
+    { "sprecip"    , {  32,  32,  32,  32,  16,  32,  32,  16 } }, /* identical to special function units */
+    { "32biadd"    , { 160, 160, 128, 128,  64, 128, 128,  64 } }, /* identical to spfma, except for kepler! */
+    { "32bimul"    , {  32,  32,  -1,  -1,  -1,  -1,  -1,  64 } },
+    { "32bishift"  , {  32,  64,  64,  64,  32,  64,  64,  64 } }, /* 2x special function, except 3.0, 3.2 */
+    { "cmp"        , { 160, 160,  64,  64,  32,  64,  64,  64 } },
+    { "32bireverse", {  32,  32,  64,  64,  32,  64,  64,  -1 } },
+    { "32biand"    , { 160, 160, 128, 128,  64, 128, 128,  64 } }, /* identical to 32biadd */
+    { "popc"       , {  32,  32,  32,  32,  16,  32,  32,  16 } }, /* identical to sprecip */
+    { "shfl"       , {  32,  32,  32,  32,  32,  32,  32,  32 } }, /* always: 32 */
+    { "convto32bit", { 128, 128,  32,  32,  16,  32,  32,  16 } },
+    { "conv64bit"  , {   8,  32,   4,   4,  16,   4,   4,  16 } },
+    { "convmisc"   , {  32,  32,  32,  32,  16,  32,  32,  16 } }  /* identical to sprecip */
+};
 
 /**
  * Returns the number of arithmetic CUDA cores per streaming multiprocessor
@@ -762,6 +794,7 @@ inline __device__ long long unsigned int getGridSize( void )
  * the 4 special function units. For 2.1 up this is a different matter
  * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities
  *      from CUDA Toolkit v9.0.176
+ * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
  **/
 inline int getCudaCoresPerMultiprocessor
 (
@@ -773,12 +806,61 @@ inline int getCudaCoresPerMultiprocessor
     if ( majorVersion == 2 && minorVersion == 1 ) /* Fermi   */ return 48 ;
     if ( majorVersion == 3 )                      /* Kepler  */ return 192;
     if ( majorVersion == 5 )                      /* Maxwell */ return 128;
-    if ( majorVersion == 6 )                      /* Pascal  */ return 64 ;
+    if ( majorVersion == 6 && minorVersion == 0 ) /* Pascal  */ return 64 ;
     if ( majorVersion == 6 && minorVersion == 1 ) /* Pascal  */ return 128;
     if ( majorVersion == 6 && minorVersion == 2 ) /* Pascal  */ return 128;
     if ( majorVersion == 7 )                      /* Volta   */ return 64 ;
     return 0; /* unknown, could also throw exception */
 }
+
+inline int getSpecialFunctionUnitsPerMultiprocessor
+(
+    int const majorVersion,
+    int const minorVersion
+)
+{
+    if ( majorVersion == 3 )                      /* Kepler  */ return 32;
+    if ( majorVersion == 5 )                      /* Maxwell */ return 32;
+    if ( majorVersion == 6 && minorVersion == 0 ) /* Pascal  */ return 16;
+    if ( majorVersion == 6 && minorVersion == 1 ) /* Pascal  */ return 32;
+    if ( majorVersion == 6 && minorVersion == 2 ) /* Pascal  */ return 32;
+    if ( majorVersion == 7 )                      /* Volta   */ return 16;
+    return 0; /* unknown, could also throw exception */
+}
+
+inline int getWarpSchedulersPerMultiprocessor
+(
+    int const majorVersion,
+    int const minorVersion
+)
+{
+    if ( majorVersion == 3 )                      /* Kepler  */ return 4;
+    if ( majorVersion == 5 )                      /* Maxwell */ return 4;
+    if ( majorVersion == 6 && minorVersion == 0 ) /* Pascal  */ return 2;
+    if ( majorVersion == 6 && minorVersion == 1 ) /* Pascal  */ return 4;
+    if ( majorVersion == 6 && minorVersion == 2 ) /* Pascal  */ return 4;
+    if ( majorVersion == 7 )                      /* Volta   */ return 4;
+    return 0; /* unknown, could also throw exception */
+}
+
+inline int getDoublePrecisionUnitsPerMultiprocessor
+(
+    int const majorVersion,
+    int const minorVersion
+)
+{
+    if ( majorVersion == 3 && minorVersion == 0 ) /* Kepler  */ return 8 ;
+    if ( majorVersion == 3 && minorVersion == 2 ) /* Kepler  */ return 8 ;
+    if ( majorVersion == 3 && minorVersion == 5 ) /* Kepler  */ return 64; /* 8 for GeForce GPUs .. how to differentiate? */
+    if ( majorVersion == 3 && minorVersion == 7 ) /* Kepler  */ return 64;
+    if ( majorVersion == 5 )                      /* Maxwell */ return 4 ;
+    if ( majorVersion == 6 && minorVersion == 0 ) /* Pascal  */ return 32;
+    if ( majorVersion == 6 && minorVersion == 1 ) /* Pascal  */ return 4 ;
+    if ( majorVersion == 6 && minorVersion == 2 ) /* Pascal  */ return 4 ;
+    if ( majorVersion == 7 )                      /* Volta   */ return 32;
+    return 0; /* unknown, could also throw exception */
+}
+
 /**
  * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#compute-capabilities
  *      from CUDA Toolkit v9.0.176
@@ -814,16 +896,11 @@ inline std::string getCudaCodeName
     int const = 0
 )
 {
-    if ( majorVersion == 2 )
-        return "Fermi";
-    if ( majorVersion == 3 )
-        return "Kepler";
-    if ( majorVersion == 5 )
-        return "Maxwell";
-    if ( majorVersion == 6 )
-        return "Pascal";
-    if ( majorVersion == 7 )
-        return "Volta";
+    if ( majorVersion == 2 ) return "Fermi"  ;
+    if ( majorVersion == 3 ) return "Kepler" ;
+    if ( majorVersion == 5 ) return "Maxwell";
+    if ( majorVersion == 6 ) return "Pascal" ;
+    if ( majorVersion == 7 ) return "Volta"  ;
     return 0; /* unknown, could also throw exception */
 }
 
@@ -832,16 +909,28 @@ inline std::string getCudaCodeName
 
 /**
  * @return flops (not GFlops, ... )
+ * @see https://www.techpowerup.com/gpudb/1857/geforce-gtx-760
+ * As can be seen here:
+ * @see http://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#arithmetic-instructions
+ * The throughput since at least Compute Capability 3.0 offers as many FMAs
+ * as simple additions, therefore for the flops we need a factor 2 to get
+ * the theoretical flops
  */
-inline float getCudaPeakFlops( cudaDeviceProp const & props )
+inline float getCudaPeakSPFlops( cudaDeviceProp const & props )
 {
     return (float) props.multiProcessorCount * props.clockRate /* kHz */ * 1e3f *
-        getCudaCoresPerMultiprocessor( props.major, props.minor );
+        getCudaCoresPerMultiprocessor( props.major, props.minor ) * 2 /* FMA */;
+}
+
+inline float getCudaPeakDPFlops( cudaDeviceProp const & props )
+{
+    return (float) props.multiProcessorCount * props.clockRate /* kHz */ * 1e3f *
+        getDoublePrecisionUnitsPerMultiprocessor( props.major, props.minor ) * 2 /* FMA */;
 }
 
 #include <sstream>
 
-std::string getCudaCacheConfigString( void )
+inline std::string getCudaCacheConfigString( void )
 {
     std::stringstream out;
     out << "Prefer ";
@@ -858,7 +947,7 @@ std::string getCudaCacheConfigString( void )
     return out.str();
 }
 
-std::string getCudaSharedMemBankSizeString( void )
+inline std::string getCudaSharedMemBankSizeString( void )
 {
     std::stringstream out;
     cudaSharedMemConfig config;
@@ -874,7 +963,7 @@ std::string getCudaSharedMemBankSizeString( void )
 }
 
 
-std::string printSharedMemoryConfig( void )
+inline std::string printSharedMemoryConfig( void )
 {
     std::stringstream out;
     out << "[Shared Memory] Config: " << getCudaCacheConfigString()
@@ -892,112 +981,6 @@ std::string printSharedMemoryConfig( void )
  * cuda_runtime_api.h header
  * @see http://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__DEVICE.html
  *      v9.0.176
- * @see http://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TYPES.html#group__CUDA__TYPES_1ge12b8a782bebe21b1ac0091bf9f4e2a3
- * List of attributes not included in device properties:
- *   CU_DEVICE_ATTRIBUTE_MAX_PITCH (could be normal mem pitch?)
- CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING = 41
-    Device shares a unified address space with the host
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_WIDTH = 42
-    Maximum 1D layered texture width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_LAYERS = 43
-    Maximum layers in a 1D layered texture
-    CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH_ALTERNATE = 47
-    Alternate maximum 3D texture width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT_ALTERNATE = 48
-    Alternate maximum 3D texture height
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH_ALTERNATE = 49
-    Alternate maximum 3D texture depth
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_WIDTH = 52
-    Maximum cubemap texture width/height
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_WIDTH = 53
-    Maximum cubemap layered texture width/height
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_LAYERS = 54
-    Maximum layers in a cubemap layered texture
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_WIDTH = 55
-    Maximum 1D surface width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_WIDTH = 56
-    Maximum 2D surface width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_HEIGHT = 57
-    Maximum 2D surface height
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_WIDTH = 58
-    Maximum 3D surface width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_HEIGHT = 59
-    Maximum 3D surface height
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_DEPTH = 60
-    Maximum 3D surface depth
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_WIDTH = 61
-    Maximum 1D layered surface width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_LAYERS = 62
-    Maximum layers in a 1D layered surface
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_WIDTH = 63
-    Maximum 2D layered surface width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_HEIGHT = 64
-    Maximum 2D layered surface height
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_LAYERS = 65
-    Maximum layers in a 2D layered surface
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_WIDTH = 66
-    Maximum cubemap surface width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_WIDTH = 67
-    Maximum cubemap layered surface width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_LAYERS = 68
-    Maximum layers in a cubemap layered surface
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LINEAR_WIDTH = 69
-    Maximum 1D linear texture width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_WIDTH = 70
-    Maximum 2D linear texture width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_HEIGHT = 71
-    Maximum 2D linear texture height
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_PITCH = 72
-    Maximum 2D linear texture pitch in bytes
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_WIDTH = 73
-    Maximum mipmapped 2D texture width
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_HEIGHT = 74
-    Maximum mipmapped 2D texture height
-CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR = 75
-    Major compute capability version number
-CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR = 76
-    Minor compute capability version number
-CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_MIPMAPPED_WIDTH = 77
-    Maximum mipmapped 1D texture width
-CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED = 78
-    Device supports stream priorities
-CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED = 79
-    Device supports caching globals in L1
-CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED = 80
-    Device supports caching locals in L1
-CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR = 81
-    Maximum shared memory available per multiprocessor in bytes
-CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR = 82
-    Maximum number of 32-bit registers available per multiprocessor
-CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY = 83
-    Device can allocate managed memory on this system
-CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD = 84
-    Device is on a multi-GPU board
-CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID = 85
-    Unique id for a group of devices on the same multi-GPU board
-CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO = 87
-    Ratio of single precision performance (in floating-point operations per second) to double precision performance
-CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS = 88
-    Device supports coherently accessing pageable memory without calling cudaHostRegister on it
-CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS = 89
-    Device can coherently access managed memory concurrently with the CPU
-CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED = 90
-    Device supports compute preemption.
-CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM = 91
-    Device can access host registered memory at the same virtual address as the CPU
-CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS = 92
-    cuStreamBatchMemOp and related APIs are supported.
-CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS = 93
-    64-bit operations are supported in cuStreamBatchMemOp and related APIs.
-CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR = 94
-    CU_STREAM_WAIT_VALUE_NOR is supported.
-CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH = 95
-    Device supports launching cooperative kernels via cuLaunchCooperativeKernel
-CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH = 96
-    Device can participate in cooperative kernels launched via cuLaunchCooperativeKernelMultiDevice
-CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN = 97
-    Maximum optin shared memory per block
-CU_DEVICE_ATTRIBUTE_MAX
  */
 inline void getCudaDeviceProperties
 (
@@ -1043,8 +1026,106 @@ inline void getCudaDeviceProperties
             case cudaComputeModeExclusiveProcess : computeModeString = cms[3];
             default                              : computeModeString = cms[4];
         }
-        int   const coresPerSM = getCudaCoresPerMultiprocessor( prop->major, prop->minor );
-        float const peakFlops  = getCudaPeakFlops( *prop );
+        int const coresPerSM = getCudaCoresPerMultiprocessor( prop->major, prop->minor );
+
+        /**
+         * @see http://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TYPES.html#group__CUDA__TYPES_1ge12b8a782bebe21b1ac0091bf9f4e2a3
+         * List of attributes not included in device properties:
+         */
+        #define TMP_ATTRIBUTE( VARNAME, NUMBER ) \
+        int VARNAME = 0;                         \
+        if ( NUMBER < CU_DEVICE_ATTRIBUTE_MAX )  \
+            cuDeviceGetAttribute( &VARNAME, (CUdevice_attribute) NUMBER, iDevice );
+        /*
+        CU_DEVICE_ATTRIBUTE_MAX_PITCH (could be normal mem pitch?)
+        CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING = 41
+            Device shares a unified address space with the host
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_WIDTH = 42
+            Maximum 1D layered texture width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_LAYERED_LAYERS = 43
+            Maximum layers in a 1D layered texture
+            CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_WIDTH_ALTERNATE = 47
+            Alternate maximum 3D texture width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_HEIGHT_ALTERNATE = 48
+            Alternate maximum 3D texture height
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE3D_DEPTH_ALTERNATE = 49
+            Alternate maximum 3D texture depth
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_WIDTH = 52
+            Maximum cubemap texture width/height
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_WIDTH = 53
+            Maximum cubemap layered texture width/height
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURECUBEMAP_LAYERED_LAYERS = 54
+            Maximum layers in a cubemap layered texture
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_WIDTH = 55
+            Maximum 1D surface width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_WIDTH = 56
+            Maximum 2D surface width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_HEIGHT = 57
+            Maximum 2D surface height
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_WIDTH = 58
+            Maximum 3D surface width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_HEIGHT = 59
+            Maximum 3D surface height
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE3D_DEPTH = 60
+            Maximum 3D surface depth
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_WIDTH = 61
+            Maximum 1D layered surface width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE1D_LAYERED_LAYERS = 62
+            Maximum layers in a 1D layered surface
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_WIDTH = 63
+            Maximum 2D layered surface width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_HEIGHT = 64
+            Maximum 2D layered surface height
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACE2D_LAYERED_LAYERS = 65
+            Maximum layers in a 2D layered surface
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_WIDTH = 66
+            Maximum cubemap surface width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_WIDTH = 67
+            Maximum cubemap layered surface width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_SURFACECUBEMAP_LAYERED_LAYERS = 68
+            Maximum layers in a cubemap layered surface
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_LINEAR_PITCH = 72
+            Maximum 2D linear texture pitch in bytes
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_WIDTH = 73
+            Maximum mipmapped 2D texture width
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE2D_MIPMAPPED_HEIGHT = 74
+            Maximum mipmapped 2D texture height
+        CU_DEVICE_ATTRIBUTE_MAXIMUM_TEXTURE1D_MIPMAPPED_WIDTH = 77
+            Maximum mipmapped 1D texture width
+        */
+        TMP_ATTRIBUTE( bStreamPrioritiesSupported, 78 ) // CU_DEVICE_ATTRIBUTE_STREAM_PRIORITIES_SUPPORTED
+        TMP_ATTRIBUTE( bGlobalL1CacheSupported   , 79 ) // CU_DEVICE_ATTRIBUTE_GLOBAL_L1_CACHE_SUPPORTED
+        TMP_ATTRIBUTE( bLocalL1CacheSupported    , 80 ) // CU_DEVICE_ATTRIBUTE_LOCAL_L1_CACHE_SUPPORTED
+        TMP_ATTRIBUTE( nBytesMaxSMPerMP          , 81 ) // CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR
+        // CU_DEVICE_ATTRIBUTE_MANAGED_MEMORY = 83 Device can allocate managed memory on this system
+        TMP_ATTRIBUTE( nBytesMaxRegistersPerMP   , 82 ) // CU_DEVICE_ATTRIBUTE_MAX_REGISTERS_PER_MULTIPROCESSOR
+        TMP_ATTRIBUTE( bMultiGpuBoard            , 84 ) // CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD
+        TMP_ATTRIBUTE( iMultiGpuBoardId          , 85 ) // CU_DEVICE_ATTRIBUTE_MULTI_GPU_BOARD_GROUP_ID
+        TMP_ATTRIBUTE( ratioSPToDPFlops          , 87 ) // CU_DEVICE_ATTRIBUTE_SINGLE_TO_DOUBLE_PRECISION_PERF_RATIO
+        /*
+        CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS = 88
+            Device supports coherently accessing pageable memory without calling cudaHostRegister on it
+        CU_DEVICE_ATTRIBUTE_CONCURRENT_MANAGED_ACCESS = 89
+            Device can coherently access managed memory concurrently with the CPU
+        CU_DEVICE_ATTRIBUTE_COMPUTE_PREEMPTION_SUPPORTED = 90
+            Device supports compute preemption.
+        CU_DEVICE_ATTRIBUTE_CAN_USE_HOST_POINTER_FOR_REGISTERED_MEM = 91
+            Device can access host registered memory at the same virtual address as the CPU
+        CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_MEM_OPS = 92
+            cuStreamBatchMemOp and related APIs are supported.
+        CU_DEVICE_ATTRIBUTE_CAN_USE_64_BIT_STREAM_MEM_OPS = 93
+            64-bit operations are supported in cuStreamBatchMemOp and related APIs.
+        CU_DEVICE_ATTRIBUTE_CAN_USE_STREAM_WAIT_VALUE_NOR = 94
+            CU_STREAM_WAIT_VALUE_NOR is supported.
+        CU_DEVICE_ATTRIBUTE_COOPERATIVE_LAUNCH = 95
+            Device supports launching cooperative kernels via cuLaunchCooperativeKernel
+        CU_DEVICE_ATTRIBUTE_COOPERATIVE_MULTI_DEVICE_LAUNCH = 96
+            Device can participate in cooperative kernels launched via cuLaunchCooperativeKernelMultiDevice
+        CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN = 97
+            Maximum optin shared memory per block
+        CU_DEVICE_ATTRIBUTE_MAX
+        */
+        #undef TMP_ATTRIBUTE
 
         printf( "\n================== Device Number %i ==================\n",iDevice );
         printf( "| Device name              : %s\n"        , prop->name );
@@ -1059,6 +1140,7 @@ inline void getCudaDeviceProperties
         printf( "| Max Threads per SMX      : %i\n"        , prop->maxThreadsPerMultiProcessor );
         printf( "| Max Threads per Block    : %i\n"        , prop->maxThreadsPerBlock );
         printf( "| Warp Size                : %i\n"        , prop->warpSize );
+        printf( "| Warp Schedulers per MP   : %i\n"        , getWarpSchedulersPerMultiprocessor( prop->major, prop->minor ) );
         printf( "| Clock Rate               : %f GHz\n"    , prop->clockRate/1.0e6f );
         printf( "| Max Block Size           : (%i,%i,%i)\n", prop->maxThreadsDim[0],
                                                              prop->maxThreadsDim[1],
@@ -1072,13 +1154,20 @@ inline void getCudaDeviceProperties
                                                              prop->warpSize );
         printf( "| CUDA Cores per Multiproc.: %i\n"        , coresPerSM );
         printf( "| Total CUDA Cores         : %i\n"        , prop->multiProcessorCount * coresPerSM );
-        printf( "| Peak FLOPS               : %f GFLOPS\n" , peakFlops / 1e9f );
+        printf( "| Peak SP-FLOPS            : %f GFLOPS\n" , getCudaPeakSPFlops( *prop ) / 1e9f );
+        printf( "| Peak DP-FLOPS            : %f GFLOPS\n" , getCudaPeakDPFlops( *prop ) / 1e9f );
+        printf( "| Peak SP/DP-FLOPS         : %i (%i)\n"   , ratioSPToDPFlops, getCudaCoresPerMultiprocessor( prop->major, prop->minor ) / getDoublePrecisionUnitsPerMultiprocessor( prop->major, prop->minor ) );
+        printf( "| Special Fun. Units per MP: %i\n"        , getSpecialFunctionUnitsPerMultiprocessor( prop->major, prop->minor ) );
         printf( "|---------------------- Memory ----------------------\n" );
         printf( "| Total Global Memory      : %lu Bytes\n" , prop->totalGlobalMem );
         printf( "| Total Constant Memory    : %lu Bytes\n" , prop->totalConstMem );
         printf( "| Shared Memory per Block  : %lu Bytes\n" , prop->sharedMemPerBlock );
+        printf( "| Shared Memory per Multip.: %i Bytes\n"  , nBytesMaxSMPerMP );
+        printf( "| Global L1 Cache supported: %s\n"        , bGlobalL1CacheSupported ? "true" : "false" );
+        printf( "| Local  L1 Cache supported: %s\n"        , bLocalL1CacheSupported  ? "true" : "false" );
         printf( "| L2 Cache Size            : %u Bytes\n"  , prop->l2CacheSize );
         printf( "| Registers per Block      : %i\n"        , prop->regsPerBlock );
+        printf( "| Registers per Multiproc. : %i\n"        , nBytesMaxRegistersPerMP );
         printf( "| Memory Bus Width         : %i Bits\n"   , prop->memoryBusWidth );
         printf( "| Memory Clock Rate        : %f GHz\n"    , prop->memoryClockRate/1.0e6f );
         printf( "| Memory Pitch             : %lu\n"       , prop->memPitch );
@@ -1107,18 +1196,19 @@ inline void getCudaDeviceProperties
         printf( "| Device is Integrated     : %s\n"        , prop->integrated        ? "true" : "false" );
         printf( "| Kernel Timeout Enabled   : %s\n"        , prop->kernelExecTimeoutEnabled ? "true" : "false" );
         printf( "| Uses TESLA Driver        : %s\n"        , prop->tccDriver         ? "true" : "false" );
+        printf( "| Stream Priorities Supp.  : %s\n"        , bStreamPrioritiesSupported ? "true" : "false" );
+        printf( "| Multi-GPU Board          : %s\n"        , bMultiGpuBoard          ? "true" : "false" );
+        if ( bMultiGpuBoard )
+        printf( "| Multi-GPU Board ID       : %i\n"        , iMultiGpuBoardId );
         printf( "=====================================================\n" );
-        fflush(stdout);
+        fflush( stdout );
     }
 
     if ( rpDeviceProperties == &fallbackPropArray )
         free( fallbackPropArray );
 }
 
-#endif
-
-#if defined( __CUDACC__ )
-#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ < 600
+#if ! defined( __CUDA_ARCH__ ) || __CUDA_ARCH__ < 600
 /**
  * atomicAdd for double is not natively implemented, because it's not
  * supported by (all) the hardware, therefore resulting in a time penalty.
@@ -1126,7 +1216,7 @@ inline void getCudaDeviceProperties
  * https://stackoverflow.com/questions/37566987/cuda-atomicadd-for-doubles-definition-error
  */
 inline __device__
-double atomicAdd( double* address, double val )
+double atomicAdd( double * address, double val )
 {
     unsigned long long int* address_as_ull =
                              (unsigned long long int *) address;
@@ -1140,7 +1230,8 @@ double atomicAdd( double* address, double val )
     return __longlong_as_double(old);
 }
 #endif
-#endif
+
+#endif // __CUDACC__
 
 
 template< class T >
@@ -1150,7 +1241,7 @@ template< class T >
 class MirroredTexture;
 
 
-#if defined( __CUDACC__ )
+#ifdef __CUDACC__
 
 /**
  * https://stackoverflow.com/questions/10535667/does-it-make-any-sense-to-use-inline-keyword-with-templates
@@ -1363,10 +1454,12 @@ public:
     }
 };
 
-#endif
+#endif // __CUDACC__
 
 
-template< class T > __device__ inline void swap( T & a, T & b )
+template< class T >
+inline __device__ __host__
+void swap( T & a, T & b )
 {
     T const c = a;
     a = b;
@@ -1374,7 +1467,7 @@ template< class T > __device__ inline void swap( T & a, T & b )
 }
 
 template< typename T >
-__host__ __device__ inline
+inline __device__ __host__
 int snprintInt
 (
     char             * const msg  ,
@@ -1428,7 +1521,7 @@ int snprintInt
     return nCharsWritten;
 }
 
-__host__ __device__ inline
+inline __device__ __host__
 int snprintFloatArray
 (
     char        * const msg  ,
@@ -1527,11 +1620,11 @@ inline bool inRange( T_Value const & x )
 #endif
 
 #ifdef CUDACOMMON_GPUINFO_MAIN
-    int main( void )
-    {
-        cudaDeviceProp * pGpus = NULL;
-        int              nGpus = 0   ;
-        getCudaDeviceProperties( &pGpus, &nGpus, true );
-        return 0;
-    }
+int main( void )
+{
+    cudaDeviceProp * pGpus = NULL;
+    int              nGpus = 0   ;
+    getCudaDeviceProperties( &pGpus, &nGpus, true );
+    return 0;
+}
 #endif
