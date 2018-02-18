@@ -1033,7 +1033,7 @@ inline void getCudaDeviceProperties
          * List of attributes not included in device properties:
          */
         #define TMP_ATTRIBUTE( VARNAME, NUMBER ) \
-        int VARNAME = 0;                         \
+        int VARNAME = -1;                        \
         if ( NUMBER < CU_DEVICE_ATTRIBUTE_MAX )  \
             cuDeviceGetAttribute( &VARNAME, (CUdevice_attribute) NUMBER, iDevice );
         /*
@@ -1208,7 +1208,7 @@ inline void getCudaDeviceProperties
         free( fallbackPropArray );
 }
 
-#if ! defined( __CUDA_ARCH__ ) || __CUDA_ARCH__ < 600
+#if defined( __CUDA_ARCH__ ) && __CUDA_ARCH__ < 600
 /**
  * atomicAdd for double is not natively implemented, because it's not
  * supported by (all) the hardware, therefore resulting in a time penalty.
