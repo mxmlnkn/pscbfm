@@ -194,17 +194,32 @@ checkSc()
     'sed' -nr '/^t[A-Z].* = [0-9.]*s$/p' -- "$logName-check.log"
     if [ "$benchmark" -eq 0 ]; then return 0; fi
 
+    program="./$name -i ../tests/inputPscBFM.bfm -e ../tests/resultNormPscBFM.seeds -o result.bfm -g $iGpu"
+    nLoopsFast=10000
+    nLoopsSlow=100
     # Get timings for kernels
     # nvprof run like this doesn't seem to add any measurable overhead => Call this in a loop to get statistics for tGpuLoop, tTaskLoop, ... instead of one-time values
-    for (( i=0; i<5; ++i )); do
-        $csrun nvprof "./$name" -i ../tests/inputPscBFM.bfm -e ../tests/resultNormPscBFM.seeds \
-            -o result.bfm -g $iGpu -m 1000 -s 1000 2>&1 | tee -a "$logName-kernels.log"
+    for (( i=0; i<10; ++i )); do
+        $csrun $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee -a "$logName-timers.log"
     done
 
     # Get profling (time-consuming)
     # https://devblogs.nvidia.com/cuda-pro-tip-nvprof-your-handy-universal-gpu-profiler/
-    $csrun nvprof --analysis-metrics --output-profile "$logName-profiling.nvvp" \
-    "./$name" -i ../tests/inputPscBFM.bfm -e ../tests/resultNormPscBFM.seeds \
-        -o result.bfm -g $iGpu -m 10 -s 10 2>&1 | tee "$logName-profiling.log"
-    # note that this takes a looooong time: adding time command: 19.6s, vs. without: 2.3s and this is basically just the overhead with 100 steps it takes 2.6s and with 1000 6.2s => a+10*b=2.3, a+100*b=2.6 => 90*b=0.3s => 10 cycles shoul only take 0.0333s, but with nvprof take 19.6-2.3=17.3s which would mean that nvprof --anylsis-metrics incurs a 519x slowdown ...
+    #$csrun nvprof --analysis-metrics --output-profile "$logName-profiling.prof" $program -m 10 -s 10 2>&1 | tee "$logName-profiling.log"
+    # note that this takes a looooong time: adding time command: 19.6s, vs. without: 2.3s and this is basically just the overhead with 100 steps it takes 2.6s and with 1000 6.2s => a+10*b=2.3, a+100*b=2.6 => 90*b=0.3s => 10 cycles should only take 0.0333s, but with nvprof take 19.6-2.3=17.3s which would mean that nvprof --anylsis-metrics incurs a 519x slowdown ...
+    # Timelines
+    nvprof --csv --normalized-time-unit s --log-file "$logName-summary.csv" --system-profiling on --print-summary \
+      $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-summary.log"
+    nvprof --csv --normalized-time-unit s --log-file "$logName-trace.csv" --system-profiling on --print-gpu-trace --print-api-trace \
+      $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-trace.log"
+    # Metrics
+    nvprof --csv --normalized-time-unit s --log-file "$logName-summary-metrics.csv" --kernels ':::1[01][0-9]' --metrics all --events all \
+      $program -m $nLoopsSlow -s $nLoopsSlow 2>&1 | tee "$logName-summary-metrics.log"
+    nvprof --csv --normalized-time-unit s --log-file "$logName-metrics.csv" --kernels ':::1[01][0-9]' --metrics all --events all --print-gpu-trace \
+      $program -m $nLoopsSlow -s $nLoopsSlow 2>&1 | tee "$logName-metrics.log"
+    # For nvvp
+    nvprof --system-profiling on -o "$logName-timeline.prof" \
+      $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-timeline.log"
+    nvprof --kernels ':::1[01][0-9]' --analysis-metrics -o "$logName-metrics.prof" \
+      $program -m 100 -s 100 2>&1 | tee "$logName-metrics.log"
 )
