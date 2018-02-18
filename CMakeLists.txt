@@ -189,7 +189,7 @@ message( " CMAKE_CXX_FLAGS_DEBUG   = ${CMAKE_CXX_FLAGS_DEBUG}" )
 set( BIN_NAME "pscbfm" )
 set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
 file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
-set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER}" )
+set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER} --compiler-options -Wall,-Wextra --relaxed-constexpr" )
 cuda_add_executable( ${BIN_NAME}
     src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
     src/pscbfm/mainCUDASimulatorGPUScBFM_AB_Type.cpp
