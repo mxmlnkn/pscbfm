@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <sstream>
 
+#include <cuda_profiler_api.h>              // cudaProfilerStop
 #ifdef USE_THRUST_FILL
 #   include <thrust/system/cuda/execution_policy.h>
 #   include <thrust/fill.h>
