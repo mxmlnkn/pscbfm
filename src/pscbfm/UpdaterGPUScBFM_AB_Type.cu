@@ -2108,4 +2108,7 @@ void UpdaterGPUScBFM_AB_Type::cleanup()
         }
     }
     this->destruct();
+
+    cudaDeviceSynchronize();
+    cudaProfilerStop();
 }
