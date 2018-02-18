@@ -11,7 +11,7 @@
 //#define USE_THRUST_FILL
 #define USE_BIT_PACKING_TMP_LATTICE
 //#define USE_BIT_PACKING_LATTICE
-#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
+//#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
 
 
 #include <algorithm>                        // fill, sort
@@ -1764,7 +1764,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 std::numeric_limits< float >::infinity() ) ),
         std::vector< std::vector< int   > >( 2 /* true or false */,
             std::vector< int   >( vnThreadsToTry.size(),
-            1 /* repeat 1 time, i.e. execute two times */ ) ),
+            2 /* repeat 2 time, i.e. execute three times */ ) ),
 #ifdef AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
         0, true, vnThreadsToTry.size() <= 1, false
 #else
