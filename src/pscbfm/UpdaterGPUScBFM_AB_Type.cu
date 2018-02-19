@@ -669,7 +669,7 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
 using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    intCUDA     const * const __restrict__ dpPolymerSystem         ,
+    vecIntCUDA  const * const __restrict__ dpPolymerSystem         ,
     T_Flags           * const __restrict__ dpPolymerFlags          ,
     uint32_t            const              iOffset                 ,
     uint8_t           * const __restrict__ dpLatticeTmp            ,
@@ -686,7 +686,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
     {
-        auto const r0 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+        auto const r0 = dpPolymerSystem[ iOffset + iMonomer ];
         /* upcast int3 to int4 in preparation to use PTX SIMD instructions */
         //int4 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z, 0 }; // not faster nor slower
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
@@ -718,7 +718,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
             for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
             {
                 auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-                auto const data2 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
+                auto const data2 = dpPolymerSystem[ iGlobalNeighbor ];
                 if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r1.x, data2.y - r1.y, data2.z - r1.z ) ] )
                 {
                     forbiddenBond = true;
@@ -748,7 +748,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
 
 __global__ void kernelCountFilteredCheck
 (
-    intCUDA          const * const __restrict__ dpPolymerSystem        ,
+    vecIntCUDA       const * const __restrict__ dpPolymerSystem        ,
     T_Flags          const * const __restrict__ dpPolymerFlags         ,
     uint32_t                 const              iOffset                ,
     uint8_t          const * const __restrict__ /* dpLatticeTmp */     ,
@@ -766,7 +766,7 @@ __global__ void kernelCountFilteredCheck
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
     {
-        auto const r0 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iOffset + iMonomer ];
+        auto const r0 = dpPolymerSystem[ iOffset + iMonomer ];
         if ( iGrid % 1 == 0 )
             rn = hash( hash( iMonomer ) ^ rSeed );
         T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
@@ -786,7 +786,7 @@ __global__ void kernelCountFilteredCheck
             for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
             {
                 auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-                auto const data2 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iGlobalNeighbor ];
+                auto const data2 = dpPolymerSystem[ iGlobalNeighbor ];
                 if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r1.x, data2.y - r1.y, data2.z - r1.z ) ] )
                 {
                     atomicAdd( dpFiltered+1, 1 );
@@ -815,7 +815,7 @@ __global__ void kernelCountFilteredCheck
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    intCUDA       const * const __restrict__ dpPolymerSystem,
+    vecIntCUDA    const * const __restrict__ dpPolymerSystem,
     T_Flags             * const __restrict__ dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLattice      ,
     uint32_t              const              nMonomers      ,
@@ -829,7 +829,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
         if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
             continue;
 
-        auto const r0 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+        auto const r0 = dpPolymerSystem[ iMonomer ];
         //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // slower
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
     #ifdef USE_BIT_PACKING_TMP_LATTICE
@@ -855,7 +855,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
 
 __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 (
-    intCUDA       const * const __restrict__ dpPolymerSystem,
+    vecIntCUDA          * const __restrict__ dpPolymerSystem,
     T_Flags             * const __restrict__ dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLattice      ,
     uint32_t              const              nMonomers      ,
@@ -886,13 +886,13 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
         /* If possible, perform move now on normal lattice */
         dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
         dpLattice[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
-        ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r1;
+        dpPolymerSystem[ iMonomer ] = r1;
     }
 }
 
 __global__ void kernelCountFilteredPerform
 (
-    intCUDA          const * const __restrict__ dpPolymerSystem  ,
+    vecIntCUDA       const * const __restrict__ dpPolymerSystem  ,
     T_Flags          const * const __restrict__ dpPolymerFlags   ,
     uint8_t          const * const __restrict__ /* dpLattice */  ,
     uint32_t                 const              nMonomers        ,
@@ -907,7 +907,7 @@ __global__ void kernelCountFilteredPerform
         if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
             continue;
 
-        auto const data = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+        auto const data = dpPolymerSystem[ iMonomer ];
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
         if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
             atomicAdd( dpFiltered+4, size_t(1) );
@@ -931,7 +931,7 @@ __global__ void kernelCountFilteredPerform
  */
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
-    intCUDA             * const __restrict__ dpPolymerSystem,
+    vecIntCUDA          * const __restrict__ dpPolymerSystem,
     T_Flags       const * const __restrict__ dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLatticeTmp   ,
     uint32_t              const              nMonomers
@@ -944,7 +944,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
             continue;
 
-        auto r0 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
+        auto r0 = dpPolymerSystem[ iMonomer ];
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
 
         r0.x += DXTableIntCUDA_d[ direction ];
@@ -957,7 +957,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
         dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
     #endif
         if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
-            ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ] = r0;
+            dpPolymerSystem[ iMonomer ] = r0;
     }
 }
 
@@ -1168,7 +1168,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     CUDA_ERROR( cudaMemset( mPolymerFlags->gpu, 0, mPolymerFlags->nBytes ) );
     /* Calculate offsets / prefix sum including the alignment */
     assert( mPolymerSystemSorted == NULL );
-    mPolymerSystemSorted = new MirroredVector< intCUDA >( nIntsPerMonomer * nMonomersPadded, mStream );
+    mPolymerSystemSorted = new MirroredVector< vecIntCUDA >( nMonomersPadded, mStream );
     #ifndef NDEBUG
         std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
     #endif
@@ -1325,11 +1325,11 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     {
         if ( i < 20 )
             mLog( "Info" ) << "Write " << i << " to " << this->iToiNew[i] << "\n";
-        auto const pTarget = mPolymerSystemSorted->host + nIntsPerMonomer * iToiNew[i];
-        pTarget[0] = mPolymerSystem[4*i+0];
-        pTarget[1] = mPolymerSystem[4*i+1];
-        pTarget[2] = mPolymerSystem[4*i+2];
-        pTarget[3] = mNeighbors[i].size;
+        auto const pTarget = mPolymerSystemSorted->host + iToiNew[i];
+        pTarget->x = mPolymerSystem[ 4*i+0 ];
+        pTarget->y = mPolymerSystem[ 4*i+1 ];
+        pTarget->z = mPolymerSystem[ 4*i+2 ];
+        pTarget->w = mNeighbors[i].size;
     }
     mPolymerSystemSorted->pushAsync();
 
@@ -1831,7 +1831,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMPerformSpeciesAndApply
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + nIntsPerMonomer * iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
@@ -1842,7 +1842,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMPerformSpecies
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + nIntsPerMonomer * iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
@@ -1854,7 +1854,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelCountFilteredPerform
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + nIntsPerMonomer * iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
@@ -1880,7 +1880,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMZeroArraySpecies
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + nIntsPerMonomer * iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
                     mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
                     mLatticeTmp->gpu,
                     mnElementsInGroup[ iSpecies ]
@@ -2062,12 +2062,12 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     /* untangle reordered array so that LeMonADE can use it again */
     for ( size_t i = 0u; i < nAllMonomers; ++i )
     {
-        auto const pTarget = mPolymerSystemSorted->host + nIntsPerMonomer * iToiNew[i];
+        auto const pTarget = mPolymerSystemSorted->host + iToiNew[i];
         if ( i < 10 )
             mLog( "Info" ) << "Copying back " << i << " from " << iToiNew[i] << "\n";
-        mPolymerSystem[ 4*i+0 ] = pTarget[0];
-        mPolymerSystem[ 4*i+1 ] = pTarget[1];
-        mPolymerSystem[ 4*i+2 ] = pTarget[2];
+        mPolymerSystem[ 4*i+0 ] = pTarget->x;
+        mPolymerSystem[ 4*i+1 ] = pTarget->y;
+        mPolymerSystem[ 4*i+2 ] = pTarget->z;
     }
 
     checkSystem(); // no-op if "Check"-level deactivated

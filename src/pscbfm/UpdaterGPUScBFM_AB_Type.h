@@ -32,6 +32,7 @@
     typedef int16_t  intCUDA;
     #define MASK5BITS 0x7FE0
 #endif
+using vecIntCUDA = CudaVec4< intCUDA >::value_type;
 
 
 #define MAX_CONNECTIVITY 4 // original connectivity
@@ -167,7 +168,6 @@ private:
      * The saved location is used as the lower left front corner when
      * populating the lattice with 2x2x2 boxes representing the monomers
      */
-    static auto constexpr nIntsPerMonomer = 4;
     std::vector< intCUDA > mPolymerSystem;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array
@@ -179,7 +179,7 @@ private:
      * Note how this struct of array leads to yet another alignment problem
      * I think I need AlignedMatrices for this, too :(
      */
-    MirroredVector< intCUDA > * mPolymerSystemSorted;
+    MirroredVector< vecIntCUDA > * mPolymerSystemSorted;
     /**
      * These are to be used for storing the flags and chosen direction of
      * the old property tag.
