@@ -142,6 +142,8 @@ checkSc()
         'rm' -f "./$name" # safety so wie don't benchmark a older version accidentally
         $csrun make $forceCompile VERBOSE=1 --output-sync -j $( nproc --all ) "$name" || return 1
         # about return 1: note that because of the piping to tee this does not affect the checkSc function as all this is called in a subshell -> need to check PIPESTATUS
+        # extract SASS code
+        cuobjdump --dump-sass "./gpu-sources/${name#benchmark-}/UpdaterGPUScBFM_AB_Type.fatbin" > "./gpu-sources/${name#benchmark-}/UpdaterGPUScBFM_AB_Type.sass"
         mkdir -p "$folder/gpu-source/"
         'mv' "./gpu-sources/${name#benchmark-}" "$folder/gpu-source/"
         # make new empty folder, because else next build might fail
