@@ -167,6 +167,7 @@ private:
      * The saved location is used as the lower left front corner when
      * populating the lattice with 2x2x2 boxes representing the monomers
      */
+    static auto constexpr nIntsPerMonomer = 4;
     std::vector< intCUDA > mPolymerSystem;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array
