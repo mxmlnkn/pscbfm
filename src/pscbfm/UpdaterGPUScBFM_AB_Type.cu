@@ -713,7 +713,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     #endif
             /* check whether the new position would result in invalid bonds
              * between this monomer and its neighbors */
-            auto const nNeighbors = r0.w;
+            auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
             bool forbiddenBond = false;
             for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
             {
@@ -781,7 +781,7 @@ __global__ void kernelCountFilteredCheck
              uint32_t(0) <= r1.z && r1.z < dcBoxZM1    )
         {
     #endif
-            auto const nNeighbors = r0.w;
+            auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
             bool forbiddenBond = false;
             for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
             {
@@ -881,8 +881,7 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
         CudaVec4< intCUDA >::value_type const r1 = {
             intCUDA( r0.x + DXTableIntCUDA_d[ direction ] ),
             intCUDA( r0.y + DYTableIntCUDA_d[ direction ] ),
-            intCUDA( r0.z + DZTableIntCUDA_d[ direction ] ),
-            r0.w
+            intCUDA( r0.z + DZTableIntCUDA_d[ direction ] ), 0
         };
         /* If possible, perform move now on normal lattice */
         dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
