@@ -9,6 +9,7 @@ dumpsysinfo()
 {
     local file='sysinfo.log'
     if [ -n "$1" ]; then file=$1; fi
+    local prefix=$2 # intended for e.g. srun on clusters
     touch "$file"
     local command commands=(
         'ifconfig'
@@ -29,6 +30,7 @@ dumpsysinfo()
         'cat /etc/hosts'
         'nvidia-smi'
         'nvidia-smi -q'
+        'nvidia-smi -q -d SUPPORTED_CLOCKS'
         'git log --oneline'
         'cmake --version'
         'g++ --version'
@@ -47,7 +49,7 @@ dumpsysinfo()
         for path in "${paths[@]}"; do
             if commandExists $path$command; then
                 echo -e "\n===== $path$command =====\n" >> "$file"
-                $path$command 2>&1 >> "$file"
+                $prefix $path$command 2>&1 >> "$file"
                 break
             fi
         done
@@ -202,7 +204,12 @@ checkSc()
     # Get timings for kernels
     # nvprof run like this doesn't seem to add any measurable overhead => Call this in a loop to get statistics for tGpuLoop, tTaskLoop, ... instead of one-time values
     for (( i=0; i<10; ++i )); do
-        $csrun $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee -a "$logName-timers.log"
+        $csrun $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee -a "$logName-timers.log" & pid=$!
+        echo '' > "$logName-timers-run-$i-throttling.log"
+        while [ -n "$( ps -o pid= -p $pid )" ]; do
+            nvidia-smi -i 0 -q >> "$logName-timers-run-$i-throttling.log"
+            sleep 0.2s
+        done
     done
 
     # Get profling (time-consuming)
