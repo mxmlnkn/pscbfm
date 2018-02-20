@@ -147,7 +147,7 @@ struct DiluteBitsCrumble { __device__ __host__ inline static T apply( T const & 
     auto x = DiluteBitsCrumble<T,nSpacing,nStepsNeeded,iStep-1>::apply( xLastStep );
     auto constexpr iStep2Pow = 1llu << ( (nStepsNeeded-1) - iStep );
     auto constexpr mask = BitPatterns::RectangularWave< T, iStep2Pow, iStep2Pow * nSpacing >::value;
-    x = ( x | ( x << ( iStep2Pow * nSpacing ) ) ) & mask;
+    x = ( x + ( x << ( iStep2Pow * nSpacing ) ) ) & mask;
     return x;
 } };
 
