@@ -449,6 +449,7 @@ __device__ inline int blockReduceCumSumPredicate( bool const x, int * const smBu
      * into __shared__ buffer. The highest thread doesn't need to store
      * its value, because noone needs to add it, this is useful, because
      * that allows calling this with some higher threadIds being filtered out */
+    assert( warpSize > 0 );
     int const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == warpSize - 1 )
         smBuffer[ iSubarray ] = cumsum;
@@ -496,6 +497,7 @@ __device__ inline int blockReduceCumSum( int const x, int * const smBuffer )
     assert( threadIdx.z == 0 );
     assert( blockDim.x <= warpSize * warpSize );
     int cumsum = warpReduceCumSum( x );
+    assert( warpSize > 0 );
     int const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == warpSize - 1 )
         smBuffer[ iSubarray ] = cumsum;
@@ -522,6 +524,7 @@ __device__ inline int blockReduceSumPredicate( bool const x, int * const smBuffe
     if ( threadIdx.x < warpSize )
         smBuffer[ threadIdx.x ] = 0;
     __syncthreads();
+    assert( warpSize > 0 );
     if ( threadIdx.x % warpSize == 0 )
         smBuffer[ threadIdx.x / warpSize ] = sum;
     __syncthreads();
@@ -545,6 +548,7 @@ __device__ inline int blockReduceSum( int const x, int * const smBuffer )
     if ( threadIdx.x < warpSize )
         smBuffer[ threadIdx.x ] = 0;
     __syncthreads();
+    assert( warpSize > 0 );
     int const iSubarray = threadIdx.x / warpSize;
     if ( threadIdx.x % warpSize == 0 )
         smBuffer[ iSubarray ] = sum;
@@ -566,6 +570,7 @@ inline T ceilDiv( T a, S b )
     assert( b != S(0) );
     assert( a == a );
     assert( b == b );
+    assert( b != 0 ); // as this is only intended for integer type data types, this check does limit more than necessary, even if it was allowed for floating point types
     return ( a + b - T(1) ) / b;
 }
 
@@ -658,6 +663,7 @@ inline void calcKernelConfig( int iDevice, uint64_t n, int * nBlocks, int * nThr
     }
     else
     {
+        assert( nMaxThreads > 0 );
         *nBlocks  = nMaxThreadsGpu / nMaxThreads;
         *nThreads = nMaxThreads;
     }
@@ -1027,6 +1033,7 @@ inline void getCudaDeviceProperties
             default                              : computeModeString = cms[4];
         }
         int const coresPerSM = getCudaCoresPerMultiprocessor( prop->major, prop->minor );
+        int const nDpFpUnits = getDoublePrecisionUnitsPerMultiprocessor( prop->major, prop->minor );
 
         /**
          * @see http://docs.nvidia.com/cuda/cuda-driver-api/group__CUDA__TYPES.html#group__CUDA__TYPES_1ge12b8a782bebe21b1ac0091bf9f4e2a3
@@ -1150,13 +1157,12 @@ inline void getCudaDeviceProperties
                                                              prop->maxGridSize[2] );
         printf( "|  => Max conc. Threads    : %i\n"        , prop->multiProcessorCount *
                                                              prop->maxThreadsPerMultiProcessor );
-        printf( "|  => Warps per SMX        : %i\n"        , prop->maxThreadsPerMultiProcessor /
-                                                             prop->warpSize );
+        printf( "|  => Warps per SMX        : %i\n"        , ( prop->warpSize == 0 ? -1 : prop->maxThreadsPerMultiProcessor / prop->warpSize ) );
         printf( "| CUDA Cores per Multiproc.: %i\n"        , coresPerSM );
         printf( "| Total CUDA Cores         : %i\n"        , prop->multiProcessorCount * coresPerSM );
         printf( "| Peak SP-FLOPS            : %f GFLOPS\n" , getCudaPeakSPFlops( *prop ) / 1e9f );
         printf( "| Peak DP-FLOPS            : %f GFLOPS\n" , getCudaPeakDPFlops( *prop ) / 1e9f );
-        printf( "| Peak SP/DP-FLOPS         : %i (%i)\n"   , ratioSPToDPFlops, getCudaCoresPerMultiprocessor( prop->major, prop->minor ) / getDoublePrecisionUnitsPerMultiprocessor( prop->major, prop->minor ) );
+        printf( "| Peak SP/DP-FLOPS         : %i (%i)\n"   , ratioSPToDPFlops, ( nDpFpUnits == 0 ? -1 : coresPerSM / nDpFpUnits ) );
         printf( "| Special Fun. Units per MP: %i\n"        , getSpecialFunctionUnitsPerMultiprocessor( prop->major, prop->minor ) );
         printf( "|---------------------- Memory ----------------------\n" );
         printf( "| Total Global Memory      : %lu Bytes\n" , prop->totalGlobalMem );
