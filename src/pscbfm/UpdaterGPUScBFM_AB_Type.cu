@@ -209,8 +209,8 @@ uint32_t UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
 )
 {
     #if defined ( USE_ZCURVE_FOR_LATTICE )
-        return   diluteBits< uint32_t, 2 >( ix & mBoxXM1 )        |
-               ( diluteBits< uint32_t, 2 >( iy & mBoxYM1 ) << 1 ) |
+        return   diluteBits< uint32_t, 2 >( ix & mBoxXM1 )        +
+               ( diluteBits< uint32_t, 2 >( iy & mBoxYM1 ) << 1 ) +
                ( diluteBits< uint32_t, 2 >( iz & mBoxZM1 ) << 2 );
     #elif defined( NOMAGIC )
         return ( ix % mBoxX ) +
@@ -236,8 +236,8 @@ __device__ inline uint32_t linearizeBoxVectorIndex
 )
 {
     #if defined ( USE_ZCURVE_FOR_LATTICE )
-        return   diluteBits< uint32_t, 2 >( ix & dcBoxXM1 )        |
-               ( diluteBits< uint32_t, 2 >( iy & dcBoxYM1 ) << 1 ) |
+        return   diluteBits< uint32_t, 2 >( ix & dcBoxXM1 )        +
+               ( diluteBits< uint32_t, 2 >( iy & dcBoxYM1 ) << 1 ) +
                ( diluteBits< uint32_t, 2 >( iz & dcBoxZM1 ) << 2 );
     #else
         #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
@@ -581,32 +581,32 @@ __device__ inline bool checkFrontBitPacked
     switch ( axis >> intCUDA(1) )
     {
         case 0: //-+x
-            is[2]  = is[7] | z0Abs; is[5]  = is[7] | z0MDZ; is[8]  = is[7] | z0PDZ;
-            is[0]  = is[2] | y0MDY; is[1]  = is[2] | y0Abs; is[2] |=         y0PDY;
-            is[3]  = is[5] | y0MDY; is[4]  = is[5] | y0Abs; is[5] |=         y0PDY;
-            is[6]  = is[8] | y0MDY; is[7]  = is[8] | y0Abs; is[8] |=         y0PDY;
+            is[2]  = is[7] + z0Abs; is[5]  = is[7] + z0MDZ; is[8]  = is[7] + z0PDZ;
+            is[0]  = is[2] + y0MDY; is[1]  = is[2] + y0Abs; is[2] +=         y0PDY;
+            is[3]  = is[5] + y0MDY; is[4]  = is[5] + y0Abs; is[5] +=         y0PDY;
+            is[6]  = is[8] + y0MDY; is[7]  = is[8] + y0Abs; is[8] +=         y0PDY;
             break;
         case 1: //-+y
-            is[2]  = is[7] | z0MDZ; is[5]  = is[7] | z0Abs; is[8]  = is[7] | z0PDZ;
-            is[0]  = is[2] | x0MDX; is[1]  = is[2] | x0Abs; is[2] |=         x0PDX;
-            is[3]  = is[5] | x0MDX; is[4]  = is[5] | x0Abs; is[5] |=         x0PDX;
-            is[6]  = is[8] | x0MDX; is[7]  = is[8] | x0Abs; is[8] |=         x0PDX;
+            is[2]  = is[7] + z0MDZ; is[5]  = is[7] + z0Abs; is[8]  = is[7] + z0PDZ;
+            is[0]  = is[2] + x0MDX; is[1]  = is[2] + x0Abs; is[2] +=         x0PDX;
+            is[3]  = is[5] + x0MDX; is[4]  = is[5] + x0Abs; is[5] +=         x0PDX;
+            is[6]  = is[8] + x0MDX; is[7]  = is[8] + x0Abs; is[8] +=         x0PDX;
             break;
         case 2: //-+z
-            is[2]  = is[7] | y0MDY; is[5]  = is[7] | y0Abs; is[8]  = is[7] | y0PDY;
-            is[0]  = is[2] | x0MDX; is[1]  = is[2] | x0Abs; is[2] |=         x0PDX;
-            is[3]  = is[5] | x0MDX; is[4]  = is[5] | x0Abs; is[5] |=         x0PDX;
-            is[6]  = is[8] | x0MDX; is[7]  = is[8] | x0Abs; is[8] |=         x0PDX;
+            is[2]  = is[7] + y0MDY; is[5]  = is[7] + y0Abs; is[8]  = is[7] + y0PDY;
+            is[0]  = is[2] + x0MDX; is[1]  = is[2] + x0Abs; is[2] +=         x0PDX;
+            is[3]  = is[5] + x0MDX; is[4]  = is[5] + x0Abs; is[5] +=         x0PDX;
+            is[6]  = is[8] + x0MDX; is[7]  = is[8] + x0Abs; is[8] +=         x0PDX;
             break;
     }
-    return bitPackedTextureGet< uint8_t >( texLattice, is[0] ) |
-           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) |
-           bitPackedTextureGet< uint8_t >( texLattice, is[2] ) |
-           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) |
-           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) |
-           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) |
-           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) |
-           bitPackedTextureGet< uint8_t >( texLattice, is[7] ) |
+    return bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[7] ) +
            bitPackedTextureGet< uint8_t >( texLattice, is[8] );
 }
 #endif
