@@ -1,9 +1,6 @@
-[submodule "mkPython"]
-	path = mkPython
-	url = ./extern/mkPython/
 [submodule "extern/mkPython"]
 	path = extern/mkPython
-	url = ./extern/mkPython/
+	url = https://github.com/mxmlnkn/mkPython.git 
 [submodule "extern/LeMonADE"]
 	path = extern/LeMonADE
 	url = https://github.com/mxmlnkn/LeMonADE.git
