@@ -1,4 +1,20 @@
-= Known Bugs =
+# Compilation
+
+    git clone --recursive git@bitbucket.org:mxmlnkn/mt-progwork.git
+    cd mt-progwork && mkdir build && cd build
+    cmake .. -DCUDA_ARCH:STRING=35 && make -j 2
+
+Tested with:
+
+ - `GIT 1.7.1`, `GNU make 3.8.1`, `CMake 3.9.0`, `g++ 5.3.0`, `CUDA 9.0.176`
+ 
+Note that Fermie `compute_20` is deprecated since CUDA 9.
+
+In order to understand what is behind the CMake procedure you can also try to compile the main program manually with:
+
+    s
+    
+# Known Bugs
 
 When g++ 7 is installed and used:
     /usr/bin/ld: CMakeFiles/SimulatorCUDAGPUScBFM_AB_Type.dir/src/pscBFMLegacy/SimulatorCUDAGPUScBFM_AB_Type_generated_UpdaterGPUScBFM_AB_Type.cu.o: relocation R_X86_64_32S against `.bss' can not be used when making a shared object; recompile with -fPIC

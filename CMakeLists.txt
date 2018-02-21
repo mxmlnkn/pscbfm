@@ -152,7 +152,7 @@ find_package( CUDA REQUIRED )
 # Thrust throws tons of warnings -.-:
 # https://gitlab.kitware.com/cmake/cmake/issues/16464
 # include_directories( SYSTEM ${CUDA_INCLUDE_DIRS} ) does not work ...
-set( CUDA_ARCH "20" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 20. To be used with -DCUDA_ARCH:STRING=30" )
+set( CUDA_ARCH "30" CACHE STRING "E.g. 30 for Kepler or 61 for the P100. Default currently 30 as 20 is deprecated since CUDA 9. To be used with -DCUDA_ARCH:STRING=30" )
 message( "CUDA_INCLUDE_DIR " )
 message( "Compile for sm_${CUDA_ARCH}" )
 # Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
