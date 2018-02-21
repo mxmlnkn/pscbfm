@@ -3,7 +3,7 @@ cmake_minimum_required( VERSION 3.1 )
 set( CMAKE_CXX_STANDARD 11 ) # needs CMake 3.1. Need C++11 for auto-keyword and list initializers ... I sure have gotten lazy :S
 
 set( LEMONADE_SUBMODULE_FOLDER "./extern/LeMonADE" )
-option( PULL_LEMONADE "If enabled LeMonADE will be downloaded and compiled in the folder ${LEMONADE_SUBMODULE_FOLDER}" OFF )
+option( PULL_LEMONADE "If enabled LeMonADE will be downloaded and compiled in the folder ${LEMONADE_SUBMODULE_FOLDER}" ON )
 option( BUILD_BENCHMARKS "If enabled possible tens of versions will be compiled in order to compare them" OFF )
 
 set( CMAKE_CXX_FLAGS "-Wall -Wextra" )
@@ -88,12 +88,6 @@ find_path( LEMONADE_LIBRARY_DIR
     DOC "LeMonADE library location"
 )
 
-if( NOT LEMONADE_INCLUDE_DIR )
-    message( "LEMONADE_INCLUDE_DIR is not provided. If build fails, use -DLEMONADE_INCLUDE_DIR=/path/to/LeMonADE/headers/ or install to default location" )
-endif()
-if( NOT LEMONADE_LIBRARY_DIR )
-    message( "LEMONADE_LIBRARY_DIR is not provided. If build fails, use -DLEMONADE_LIBRARY_DIR=/path/to/LeMonADE/lib/ or install to default location" )
-endif()
 if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
     if( PULL_LEMONADE )
         message( "Installing LeMonADE ..." )
@@ -119,7 +113,16 @@ if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
         endif()
         set( LEMONADE_INCLUDE_DIR "${PROJECT_SOURCE_DIR}/${LEMONADE_SUBMODULE_FOLDER}/include" )
         set( LEMONADE_LIBRARY_DIR "${PROJECT_SOURCE_DIR}/${LEMONADE_SUBMODULE_FOLDER}/lib" )
-    else()
+    endif()
+
+    if( NOT LEMONADE_INCLUDE_DIR )
+        message( "LEMONADE_INCLUDE_DIR is not provided. If build fails, use -DLEMONADE_INCLUDE_DIR=/path/to/LeMonADE/headers/ or install to default location" )
+    endif()
+    if( NOT LEMONADE_LIBRARY_DIR )
+        message( "LEMONADE_LIBRARY_DIR is not provided. If build fails, use -DLEMONADE_LIBRARY_DIR=/path/to/LeMonADE/lib/ or install to default location" )
+    endif()
+
+    if( NOT PULL_LEMONADE )
         message( "You can also call cmake again with the option -DPULL_LEMONADE=ON in order to try to automatically download and compile LeMonADE into a default subfolder." )
     endif()
 else()
