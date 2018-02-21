@@ -1,6 +1,11 @@
 cmake_minimum_required( VERSION 3.1 )
 
 set( CMAKE_CXX_STANDARD 11 ) # needs CMake 3.1. Need C++11 for auto-keyword and list initializers ... I sure have gotten lazy :S
+if( CMAKE_CXX_COMPILER_ID STREQUAL "GNU" )
+    if( CMAKE_CXX_COMPILER_VERSION VERSION_LESS "4.8.0" )
+        message( FATAL_ERROR "Insufficient gcc version. Need at least 4.7.0 for -std=c++11 flag for 'using T=int;' and at least 4.8.0 for more generalized initializer lists! See also https://gcc.gnu.org/onlinedocs/gcc-4.6.4/gcc/C-Dialect-Options.html#C-Dialect-Options vs. https://gcc.gnu.org/onlinedocs/gcc-4.7.0/gcc/C-Dialect-Options.html#C-Dialect-Options" )
+    endif()
+endif()
 
 set( LEMONADE_SUBMODULE_FOLDER "./extern/LeMonADE" )
 option( PULL_LEMONADE "If enabled LeMonADE will be downloaded and compiled in the folder ${LEMONADE_SUBMODULE_FOLDER}" ON )
@@ -132,13 +137,14 @@ endif()
 include_directories( "extern/" ) # Fundamental
 add_executable( findMaxNeighbors ../src/findMaxNeighbors.cpp )
 target_link_libraries( findMaxNeighbors )
+# Might wanna link statically: https://stackoverflow.com/questions/38694058/cmake-linking-statically-against-libgcc-and-libstdc-into-a-shared-library?rq=1
 
 
 # Declare include SYSTEM, in order to suppress C++11-induced warnings from
 # LeMonADE and Loki headers: warning:
 # ‘template<class> class std::auto_ptr’ is deprecated [-Wdeprecated-declarations]
 include_directories( SYSTEM ${LEMONADE_INCLUDE_DIR} )
-link_directories   ( SYSTEM ${LEMONADE_LIBRARY_DIR} )
+link_directories   (        ${LEMONADE_LIBRARY_DIR} )
 
 file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
 add_executable( singleLinearChain ${SOURCE_FILES} )

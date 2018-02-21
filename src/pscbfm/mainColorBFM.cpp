@@ -1,8 +1,15 @@
 
+#include <array>
+#include <cstdlib>                      // atol
+#include <stdint-h>                     // uint8_t, uint32_t (cstdint seems to be C++11)
 #include <cstring>
-//#include <cstdint>                      // uint32_t (C++11)
+#include <exception>
+#include <fstream>                      // getline
 #include <iostream>
+#include <map>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include <getopt.h>
 
