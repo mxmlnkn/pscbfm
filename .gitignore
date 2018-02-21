@@ -1,3 +1,13 @@
+# Binaries with no extension at all, I think this must come at first, else the negating pattern undoes all other rules
+https://stackoverflow.com/questions/19023550/how-do-i-add-files-without-dots-in-them-all-extension-less-files-to-the-gitign
+*
+!/**/
+!*.*
+
+# hidden files
+.*
+!/.git*
+
 # Compiled Object files
 *.slo
 *.lo
@@ -33,7 +43,10 @@
 *.cubin
 *.fatbin
 *.stub.c
-*.ptx
+
+# CUDA profiling data
+*.nvvp
+*.prof
 
 #Visual Studio compile files
 *.exp
@@ -101,14 +114,19 @@
 
 # Basically binaries, file size intesive -> use --force to add, if really necessary
 *.pdf
-*.gif
 *.mkv
-*.png
 *.dat
-*.tif
-*.bmp
+*.csv
 *.pptx
 *.ppt
+
+# Images
+*.jpg
+*.gif
+*.png
+*.tif
+*.tiff
+*.bmp
 
 # CMake build files
 **/build*/
@@ -139,11 +157,7 @@
 # original backup files
 *.orig
 
-# hidden files
-.*
-!/.git*
-
-# Test Files (use .md for important notes instead)
+# Text Files (use .md for important notes instead)
 *.txt
 
 # Log files
