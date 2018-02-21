@@ -2068,6 +2068,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         mPolymerSystem[ 4*i+0 ] = pTarget->x;
         mPolymerSystem[ 4*i+1 ] = pTarget->y;
         mPolymerSystem[ 4*i+2 ] = pTarget->z;
+        mPolymerSystem[ 4*i+3 ] = pTarget->w;
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
@@ -2082,21 +2083,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
  */
 void UpdaterGPUScBFM_AB_Type::cleanup()
 {
-    /* check whether connectivities on GPU got corrupted */
-    for ( uint32_t i = 0; i < nAllMonomers; ++i )
-    {
-        unsigned const nNeighbors = ( mPolymerSystem[ 4*i+3 ] & 224 /* 0b11100000 */ ) >> 5;
-        if ( nNeighbors != mNeighbors[i].size )
-        {
-            std::stringstream msg;
-            msg << "[" << __FILENAME__ << "::~cleanup" << "] "
-                << "Connectivities in property field of mPolymerSystem are "
-                << "different from host-side connectivities. This should not "
-                << "happen! (Monomer " << i << ": " << nNeighbors << " != "
-                << mNeighbors[i].size << "\n";
-            throw std::runtime_error( msg.str() );
-        }
-    }
     this->destruct();
 
     cudaDeviceSynchronize();
