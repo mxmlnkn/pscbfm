@@ -130,7 +130,9 @@ public:
         mUpdaterGpu.initialize();
 
         auto const tInit1 = std::chrono::high_resolution_clock::now();
-        mLog( "Benchmark" ) << "tInit = " << std::chrono::duration<double>( tInit1 - tInit0 ).count() << "s\n";
+        std::stringstream sBuffered;
+        sBuffered << "tInit = " << std::chrono::duration<double>( tInit1 - tInit0 ).count() << "s\n";
+        mLog( "Benchmark" ) << sBuffered.str();
     }
 
     /**
@@ -180,7 +182,9 @@ public:
         if ( mLog.isActive( "Benchmark" ) )
         {
             auto const tCopyBack1 = std::chrono::high_resolution_clock::now();
-            mLog( "Benchmark" ) << "tCopyback = " << std::chrono::duration<double>( tCopyBack1 - tCopyBack0 ).count() << "s\n";
+            std::stringstream sBuffered;
+            sBuffered << "tCopyback = " << std::chrono::duration<double>( tCopyBack1 - tCopyBack0 ).count() << "s\n";
+            mLog( "Benchmark" ) << sBuffered.str();
         }
         return true;
     }

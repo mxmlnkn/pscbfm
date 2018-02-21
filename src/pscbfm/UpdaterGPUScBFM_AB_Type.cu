@@ -1983,7 +1983,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         cudaEventSynchronize( tGpu1 );  // basically a StreamSynchronize
         float milliseconds = 0;
         cudaEventElapsedTime( & milliseconds, tGpu0, tGpu1 );
-        mLog( "Benchmark" ) << "tGpuLoop = " << milliseconds / 1000. << "s\n";
+        std::stringstream sBuffered;
+        sBuffered << "tGpuLoop = " << milliseconds / 1000. << "s\n";
+        mLog( "Benchmark" ) << sBuffered.str();
     }
 
     if ( mLog.isActive( "Stats" ) && dpFiltered != NULL )

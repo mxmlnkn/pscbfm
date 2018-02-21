@@ -165,7 +165,9 @@ int main( int argc, char ** argv )
         taskmanager.run( max_mcs / save_interval );
 
         auto const tTasks1 = hrclock::now();
-        std::cerr << "tTaskLoop = " << std::chrono::duration<double>( tTasks1 - tTasks0 ).count() << "s\n";
+        std::stringstream sBuffered;
+        sBuffered << "tTaskLoop = " << std::chrono::duration<double>( tTasks1 - tTasks0 ).count() << "s\n";
+        std::cerr << sBuffered.str();
 
         taskmanager.cleanup();
     }
@@ -175,6 +177,8 @@ int main( int argc, char ** argv )
     }
 
     auto const tProgram1 = hrclock::now();
-    std::cerr << "tProgram = " << std::chrono::duration<double>( tProgram1 - tProgram0 ).count() << "s\n";
+    std::stringstream sBuffered;
+    sBuffered << "tProgram = " << std::chrono::duration<double>( tProgram1 - tProgram0 ).count() << "s\n";
+    std::cerr << sBuffered.str();
     return 0;
 }

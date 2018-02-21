@@ -1,7 +1,7 @@
 
 #include <array>
 #include <cstdlib>                      // atol
-#include <stdint-h>                     // uint8_t, uint32_t (cstdint seems to be C++11)
+#include <stdint.h>                     // uint8_t, uint32_t (cstdint seems to be C++11)
 #include <cstring>
 #include <exception>
 #include <fstream>                      // getline
