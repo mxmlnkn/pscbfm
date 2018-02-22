@@ -25,7 +25,6 @@
 #include <LeMonADE/updater/UpdaterSimpleSimulator.h>
 
 #include "GPUScBFM_AB_Type.h"
-#include "FeatureNetwork.h"
 #include "graphColoring.tpp"
 #include "SelectiveLogger.hpp"              // __FILENAME__
 

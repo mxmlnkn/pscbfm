@@ -19,7 +19,6 @@
 #include <LeMonADE/updater/UpdaterSimpleSimulator.h>
 
 #include "GPUScBFM_AB_Type.h"
-#include "FeatureNetwork.h"
 #include "SelectiveLogger.hpp"              // __FILENAME__
 
 
@@ -144,8 +143,8 @@ int main( int argc, char ** argv )
             FeatureLattice< uint8_t > FeatureExcludedVolume< FeatureLatticePowerOfTwo<> > )
             Features;
         */
-        typedef LOKI_TYPELIST_4( FeatureMoleculesIO, FeatureAttributes,
-                                 FeatureExcludedVolumeSc<>, FeatureNetwork ) Features;
+        typedef LOKI_TYPELIST_3( FeatureMoleculesIO, FeatureAttributes,
+                                 FeatureExcludedVolumeSc<> ) Features;
 
         typedef ConfigureSystem< VectorInt3, Features, 8 > Config;
         typedef Ingredients< Config > Ing;

@@ -77,10 +77,18 @@ dumpsysinfo()
 
 ignoreBFMLines()
 {
-    sed -r '/^#!version=[0-9.]+$/d;
-            /^#[A-Z][a-z]{2} +[A-Z][a-z]{2} +[0-9]+ [0-9:]+ +[0-9]+$/d;
-            /^# FeatureExcluded/d;
-            /^#[ \t]+max connectivity: /d;'
+    sed -r '
+        /^#!version=[0-9.]+$/d;
+        /^#[A-Z][a-z]{2} +[A-Z][a-z]{2} +[0-9]+ [0-9:]+ +[0-9]+$/d;
+        /^# FeatureExcluded/d;
+        /^#[ \t]+max connectivity: /d;
+        /^# FeatureNetwork/d;
+    ' | tac | sed -r '
+        /^#!NrOfStars/,+1d;
+        /^#!NrOfMonomersPerStarArm/,+1d;
+        /^#!NrOfCrosslinker/,+1d;
+        /^#!CrosslinkerFunctionality/,+1d;
+    ' | tac
     # For example one diff was:
     #   2c2
     #   < #!version=2.0
