@@ -109,7 +109,7 @@ if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
             cd build                                                        && \
             cmake -DCMAKE_CXX_COMPILER='${CMAKE_CXX_COMPILER}'                 \
                   -DINSTALLDIR_LEMONADE=.. DCMAKE_INSTALL_PREFIX=.. ..      && \
-            make install                                                       \
+            make && make install                                               \
             "
             WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         )
