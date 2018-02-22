@@ -121,11 +121,13 @@ checkSc()
     local iGpu=
     local arch=30
     local forceCompile=
+    local nBenchmarks=10
 
     while [ $# -gt 0 ]; do case "$1" in
         --arch) shift; arch=$1; ;;
         -f|--force-compile) forceCompile='-B'; ;;
         -b|--benchmark) benchmark=1; ;;
+        -n|--n-repeat-benchmarks) shift; nBenchmarks=$1; ;;
         -p|--profile) profile=1; benchmark=1; ;;
         -c|--check) check='cuda-memcheck --leak-check full'; ;;
         -g|--gpu) shift; iGpu=$1; ;;
@@ -234,7 +236,7 @@ checkSc()
     nLoopsSlow=100
     # Get timings for kernels
     # nvprof run like this doesn't seem to add any measurable overhead => Call this in a loop to get statistics for tGpuLoop, tTaskLoop, ... instead of one-time values
-    for (( i=0; i<10; ++i )); do
+    for (( i = 0; i < nBenchmarks; ++i )); do
         $csrun $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee -a "$logName-timers.log" & pid=$!
         echo '' > "$logName-timers-run-$i-throttling.log"
         while [ -n "$( ps -o pid= -p $pid )" ]; do
