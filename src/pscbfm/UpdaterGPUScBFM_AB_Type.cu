@@ -968,6 +968,7 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mLattice             ( NULL ),
    mLatticeOut          ( NULL ),
    mLatticeTmp          ( NULL ),
+   mLatticeTmp2         ( NULL ),
    mPolymerSystemSorted ( NULL ),
    mPolymerFlags        ( NULL ),
    mNeighborsSorted     ( NULL ),
@@ -1006,6 +1007,7 @@ void UpdaterGPUScBFM_AB_Type::destruct()
     if ( mLattice         != NULL ){ delete[] mLattice        ; mLattice         = NULL; }  // setLatticeSize
     if ( mLatticeOut      != NULL ){ delete   mLatticeOut     ; mLatticeOut      = NULL; }  // initialize
     if ( mLatticeTmp      != NULL ){ delete   mLatticeTmp     ; mLatticeTmp      = NULL; }  // initialize
+    if ( mLatticeTmp2     != NULL ){ delete   mLatticeTmp2    ; mLatticeTmp2     = NULL; }  // initialize
     if ( mPolymerSystemSorted != NULL ){ delete mPolymerSystemSorted; mPolymerSystemSorted = NULL; }  // initialize
     if ( mPolymerFlags    != NULL ){ delete   mPolymerFlags   ; mPolymerFlags    = NULL; }  // initialize
     if ( mNeighborsSorted != NULL ){ delete   mNeighborsSorted; mNeighborsSorted = NULL; }  // initialize
@@ -1344,9 +1346,13 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
 
     mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
+    mLatticeTmp2 = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     CUDA_ERROR( cudaMemsetAsync( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream ) );
+    CUDA_ERROR( cudaMemsetAsync( mLatticeTmp2->gpu, 0, mLatticeTmp2->nBytes, mStream ) );
     /* populate latticeOut with monomers from mPolymerSystem */
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
+    std::memset( mLatticeTmp->host, 0, mLatticeTmp->nBytes );
+    std::memset( mLatticeTmp2->host, 0, mLatticeTmp2->nBytes );
     for ( uint32_t t = 0; t < nAllMonomers; ++t )
     {
         mLatticeOut->host[ linearizeBoxVectorIndex( mPolymerSystem[ 4*t+0 ],
@@ -1772,6 +1778,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         cudaEventRecord( tGpu0, mStream );
     }
 
+    cudaStream_t streamMemset = 0;
+
     /* run simulation */
     for ( int32_t iStep = 1; iStep <= nMonteCarloSteps; ++iStep )
     {
@@ -1870,10 +1878,26 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                                   (uint64_t*)( mLatticeTmp->gpu + mLatticeTmp->nElements ), 0 );
                 #else
                     #ifdef USE_BIT_PACKING_TMP_LATTICE
-                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes / CHAR_BIT, mStream );
+                        auto const nBytesToDelete = mLatticeTmp->nBytes / CHAR_BIT;
                     #else
-                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream );
+                        auto const nBytesToDelete = mLatticeTmp->nBytes;
                     #endif
+                    /* delete the tmp buffer we have used in the last step */
+                    if ( streamMemset == 0 )
+                    {
+                        CUDA_ERROR( cudaStreamCreate( & streamMemset ) )
+                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, nBytesToDelete, streamMemset );
+                        //cudaMemcpyAsync( (void*) mLatticeTmp->gpu, (void*) mLatticeTmp->host, nBytesToDelete, cudaMemcpyHostToDevice, streamMemset );
+                    }
+                    else
+                    {
+                        /* wait for memset of last round to finish which
+                           hopefully is already finished */
+                        CUDA_ERROR( cudaStreamSynchronize( streamMemset ) );
+                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, nBytesToDelete, streamMemset );
+                        //cudaMemcpyAsync( (void*) mLatticeTmp->gpu, (void*) mLatticeTmp->host, nBytesToDelete, cudaMemcpyHostToDevice, streamMemset );
+                        std::swap( mLatticeTmp, mLatticeTmp2 );
+                    }
                 #endif
             }
             else

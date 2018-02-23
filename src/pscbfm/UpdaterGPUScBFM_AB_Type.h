@@ -142,7 +142,7 @@ private:
      *             the reading faster if it is memory bound ???
      */
     uint8_t * mLattice; // being used for checkLattice nothing else ...
-    MirroredTexture< uint8_t > * mLatticeOut, * mLatticeTmp;
+    MirroredTexture< uint8_t > * mLatticeOut, * mLatticeTmp, * mLatticeTmp2;
 
     /* copy into mPolymerSystem and drop the property tag while doing so.
      * would be easier and probably more efficient if mPolymerSystem_device/host
