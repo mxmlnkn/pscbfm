@@ -318,6 +318,8 @@ std::vector< T_Color > graphColoring
         }
     #endif
 
+    /* if wished, do a second run flipping the most frequent colors to the
+     * least frequent colors, until we reached unform distribution */
     if ( rbUniformColors )
     {
         std::cerr << "Make colors uniformly distributed\n";
