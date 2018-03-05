@@ -244,7 +244,67 @@ __device__ inline ulong4 operator+( ulong4 const & x, ulong4 const & y ) {
 
 
 #ifdef __CUDACC__
-#if ! defined( __CUDA_ARCH__ ) || __CUDA_ARCH__ >= 300
+
+#define TMP_DEFINE_CUDA_SHFL_ARGS               \
+(                                               \
+    int          const & var             ,      \
+    int          const & srcLane         ,      \
+    int          const & width = warpSize,      \
+    unsigned int const & mask  = 0xFFFFFFFFu    \
+)
+#if __CUDACC_VER_MAJOR__ >= 9
+#define TMP_DEFINE_CUDA_SHFL_WRAPPERS( SUFFIX )                     \
+__forceinline__ __device__ int cuda_shfl##SUFFIX                    \
+TMP_DEFINE_CUDA_SHFL_ARGS                                           \
+{                                                                   \
+    return __shfl ## SUFFIX ## _sync( mask, var, srcLane, width );  \
+}
+#else
+#define TMP_DEFINE_CUDA_SHFL_WRAPPERS( SUFFIX )     \
+__forceinline__ __device__ int cuda_shfl##SUFFIX    \
+TMP_DEFINE_CUDA_SHFL_ARGS                           \
+{                                                   \
+    (void) mask; /* suppress unused warning */      \
+    return __shfl_down( var, srcLane, width );      \
+}
+#endif
+TMP_DEFINE_CUDA_SHFL_WRAPPERS(       )
+TMP_DEFINE_CUDA_SHFL_WRAPPERS( _up   )
+TMP_DEFINE_CUDA_SHFL_WRAPPERS( _down )
+TMP_DEFINE_CUDA_SHFL_WRAPPERS( _xor  )
+#undef TMP_DEFINE_CUDA_SHFL_WRAPPERS
+#undef TMP_DEFINE_CUDA_SHFL_ARGS
+
+
+__forceinline__ __device__ int cuda_ballot
+(
+    int          const & predicate,
+    unsigned int         mask = 0xFFFFFFFFu
+)
+{
+    #if __CUDACC_VER_MAJOR__ >= 9
+        return __ballot_sync( mask, predicate );
+    #else
+        (void) mask; /* suppress unused warning */
+        return __ballot( predicate );
+    #endif
+}
+
+
+#endif
+
+
+#ifdef __CUDACC__
+/**
+ * needs 3.0 feature __shfl, but most likely won't work with Volta, which
+ * breaks the warp lock-step computuation giving every thread it's own
+ * program counter
+ * This necessetitates rethinking these algorithms to get the correct mask
+ * for the _shfl_sync variants and also introduce __syncwarp() where
+ * implicitly assumed
+ * @see https://devblogs.nvidia.com/using-cuda-warp-level-primitives/
+ */
+#if ! defined( __CUDA_ARCH__ ) || ( __CUDA_ARCH__ >= 300 && __CUDA_ARCH__ < 700 )
 
 /**
  * Reduces a value inside each warp who calls this function recursively
@@ -278,14 +338,14 @@ T warpReduceSum( T x )
 #if 0
     #pragma unroll
     for ( int delta = warpSize >> 1; delta > 0; delta >>= 1 )
-        x += __shfl_down( x, delta );
+        x += cuda_shfl_down( x, delta );
 #else
     assert( warpSize == 32 );
-    x += __shfl_down( x, 16 );
-    x += __shfl_down( x,  8 );
-    x += __shfl_down( x,  4 );
-    x += __shfl_down( x,  2 );
-    x += __shfl_down( x,  1 );
+    x += cuda_shfl_down( x, 16 );
+    x += cuda_shfl_down( x,  8 );
+    x += cuda_shfl_down( x,  4 );
+    x += cuda_shfl_down( x,  2 );
+    x += cuda_shfl_down( x,  1 );
 #endif
     return x;
 }
@@ -296,14 +356,14 @@ T warpAllReduceSum( T x )
 #if 0
     #pragma unroll
     for ( int mask = warpSize >> 1; mask > 0; mask >>= 1 )
-        x += __shfl_xor( x, mask );
+        x += cuda_shfl_xor( x, mask );
 #else
     assert( warpSize == 32 );
-    x += __shfl_xor( x, 16 );
-    x += __shfl_xor( x,  8 );
-    x += __shfl_xor( x,  4 );
-    x += __shfl_xor( x,  2 );
-    x += __shfl_xor( x,  1 );
+    x += cuda_shfl_xor( x, 16 );
+    x += cuda_shfl_xor( x,  8 );
+    x += cuda_shfl_xor( x,  4 );
+    x += cuda_shfl_xor( x,  2 );
+    x += cuda_shfl_xor( x,  1 );
 #endif
     return x;
 }
@@ -378,7 +438,7 @@ T warpReduceCumSum( T x )
     for ( int width = 1; width < warpSize; width <<= 1 )
     {
         int const srcId = ( laneId & ~( width-1 ) ) - 1;
-        int const dx = __shfl( x, srcId );
+        int const dx = cuda_shfl( x, srcId );
         if ( laneId % ( width * 2 ) >= width )
             x += dx;
     }
@@ -393,17 +453,17 @@ T warpReduceCumSum( T x )
      * would be the same as as: __shfl( x, id = 0b11, width = 0b1000 )
      */
     #if 0
-        dx = __shfl( x, ( laneId & 0xFFFF ) - 1 ); if ( laneId %  2 >=  1 ) x += dx;
-        dx = __shfl( x, ( laneId & 0xFFFE ) - 1 ); if ( laneId %  4 >=  2 ) x += dx;
-        dx = __shfl( x, ( laneId & 0xFFFC ) - 1 ); if ( laneId %  8 >=  4 ) x += dx;
-        dx = __shfl( x, ( laneId & 0xFFF8 ) - 1 ); if ( laneId % 16 >=  8 ) x += dx;
-        dx = __shfl( x, ( laneId & 0xFFF0 ) - 1 ); if ( laneId % 32 >= 16 ) x += dx;
+        dx = cuda_shfl( x, ( laneId & 0xFFFF ) - 1 ); if ( laneId %  2 >=  1 ) x += dx;
+        dx = cuda_shfl( x, ( laneId & 0xFFFE ) - 1 ); if ( laneId %  4 >=  2 ) x += dx;
+        dx = cuda_shfl( x, ( laneId & 0xFFFC ) - 1 ); if ( laneId %  8 >=  4 ) x += dx;
+        dx = cuda_shfl( x, ( laneId & 0xFFF8 ) - 1 ); if ( laneId % 16 >=  8 ) x += dx;
+        dx = cuda_shfl( x, ( laneId & 0xFFF0 ) - 1 ); if ( laneId % 32 >= 16 ) x += dx;
     #else
-        dx = __shfl( x,  0,  2 ); if ( laneId &  1 ) x += dx;
-        dx = __shfl( x,  1,  4 ); if ( laneId &  2 ) x += dx;
-        dx = __shfl( x,  3,  8 ); if ( laneId &  4 ) x += dx;
-        dx = __shfl( x,  7, 16 ); if ( laneId &  8 ) x += dx;
-        dx = __shfl( x, 15, 32 ); if ( laneId & 16 ) x += dx;
+        dx = cuda_shfl( x,  0,  2 ); if ( laneId &  1 ) x += dx;
+        dx = cuda_shfl( x,  1,  4 ); if ( laneId &  2 ) x += dx;
+        dx = cuda_shfl( x,  3,  8 ); if ( laneId &  4 ) x += dx;
+        dx = cuda_shfl( x,  7, 16 ); if ( laneId &  8 ) x += dx;
+        dx = cuda_shfl( x, 15, 32 ); if ( laneId & 16 ) x += dx;
     #endif
 #endif
     return x;
@@ -420,14 +480,14 @@ __device__ inline int warpReduceCumSumPredicate( bool const x )
     assert( warpSize == 32 );
     int const laneId = threadIdx.x & 0x1F; /* 32-1 -> laneID, not sure if faster than % warpSize */;
     int const mask = ( 2u << laneId ) - 1u; // will even wark for laneId 31, reslting in 0-1=-1
-    return __popc( __ballot(x) & mask );
+    return __popc( cuda_ballot(x) & mask );
 }
 
 __device__ inline int warpReduceSumPredicate( bool const x )
 {
     /* Inactive threads are represented by 0 bit!
      * @see https://stackoverflow.com/questions/23589734/ballot-behavior-on-inactive-lanes?rq=1 */
-    return __popc( __ballot(x) );
+    return __popc( cuda_ballot(x) );
 }
 
 /**

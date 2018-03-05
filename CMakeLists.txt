@@ -155,6 +155,12 @@ add_executable( mainTestAll ${SOURCE_FILES} )
 target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
 find_package( CUDA REQUIRED )
+if( ${CUDA_VERSION_MAJOR} GREATER 7 )
+    set( NVCC_EXPERIMENTAL_FLAG "--expt" )
+else()
+    set( NVCC_EXPERIMENTAL_FLAG "-" )
+endif()
+
 # Thrust throws tons of warnings -.-:
 # https://gitlab.kitware.com/cmake/cmake/issues/16464
 # include_directories( SYSTEM ${CUDA_INCLUDE_DIRS} ) does not work ...
@@ -198,7 +204,7 @@ message( " CMAKE_CXX_FLAGS_DEBUG   = ${CMAKE_CXX_FLAGS_DEBUG}" )
 set( BIN_NAME "pscbfm" )
 set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
 file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
-set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER} --compiler-options -Wall,-Wextra --relaxed-constexpr" )
+set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER} --compiler-options -Wall,-Wextra ${NVCC_EXPERIMENTAL_FLAG}-relaxed-constexpr" )
 cuda_add_executable( ${BIN_NAME}
     src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
     src/pscbfm/mainCUDASimulatorGPUScBFM_AB_Type.cpp
