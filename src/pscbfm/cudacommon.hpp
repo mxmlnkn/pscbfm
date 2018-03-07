@@ -23,6 +23,10 @@
 
 #define __FILENAME__ (__builtin_strrchr(__FILE__, '/') ? __builtin_strrchr(__FILE__, '/') + 1 : __FILE__)
 
+/* https://stackoverflow.com/questions/16989730/stringification-how-does-it-work */
+#define MACRO_CONTENT_TO_STRING MACRO_CONTENT_TO_STRING_HELPER(s)
+#define MACRO_CONTENT_TO_STRING_HELPER(s) #s
+
 /* https://stackoverflow.com/questions/8796369/cuda-and-nvcc-using-the-preprocessor-to-choose-between-float-or-double
 It seems you might be conflating two things - how to differentiate between the host and device compilation trajectories when nvcc is processing CUDA code, and how to differentiate between CUDA and non-CUDA code. There is a subtle difference between the two. __CUDA_ARCH__ answers the first question, and __CUDACC__ answers the second.
 */

@@ -194,6 +194,44 @@ if( CMAKE_BUILD_TYPE STREQUAL "Debug" )
 endif()
 
 # no find_package for thrust needed, as it should be in the include folder for CUDA
+# @see http://xit0.org/2013/04/cmake-use-git-branch-and-commit-details-in-project/
+
+# Get the current working branch
+execute_process(
+    COMMAND git rev-parse --abbrev-ref HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_BRANCH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+# Get the latest abbreviated commit hash of the working branch
+execute_process(
+    COMMAND git log -1 --format=%h
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+# Test if there are uncommitted change i.e. the repo is dirty
+execute_process(
+    COMMAND git diff-index HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_DIRTY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if( "${GIT_DIRTY}" STREQUAL "" )
+    set( GIT_DIRTY "clean" )
+else()
+    set( GIT_DIRTY "dirty" )
+endif()
+message( "GIT_DIRTY = ${GIT_DIRTY}" ) # why is this empty !?
+
+add_definitions( '-DGIT_COMMIT_HASH="${GIT_COMMIT_HASH}"' )
+add_definitions( '-DGIT_BRANCH="${GIT_BRANCH}"' )
+add_definitions( '-DGIT_DIRTY="${GIT_DIRTY}"' )
+
+#### Compiler setup finished, start actual compilations / projects ####
+
 
 message( " CMAKE_CXX_FLAGS         = ${CMAKE_CXX_FLAGS}" )
 message( " CMAKE_CXX_FLAGS_RELEASE = ${CMAKE_CXX_FLAGS_RELEASE}" )

@@ -76,11 +76,12 @@ int main( int argc, char ** argv )
                 { "max-mcs"      , required_argument, 0, 'm' },
                 { "output"       , required_argument, 0, 'o' },
                 { "save-interval", required_argument, 0, 's' },
-                { 0, 0, 0, 0 }    // signify end of list
+                { "version"      , no_argument      , 0, 'v' },
+                { 0, 0, 0, 0 }    // signal end of list
             };
             /* getopt_long stores the option index here. */
             int option_index = 0;
-            int c = getopt_long( argc, argv, "e:g:hi:m:o:s:", long_options, &option_index );
+            int c = getopt_long( argc, argv, "e:g:hi:m:o:s:v", long_options, &option_index );
 
             if ( c == -1 )
                 break;
@@ -107,6 +108,12 @@ int main( int argc, char ** argv )
                     break;
                 case 's':
                     save_interval = std::atol( optarg );
+                    break;
+                case 'v':
+                    std::cout
+                        << "Version compiled on " << __DATE__
+                        << " using commit " << GIT_COMMIT_HASH << "-" << GIT_DIRTY
+                        << " on branch " << GIT_BRANCH << std::endl;
                     break;
                 default:
                     std::cerr << "Unknown option encountered: " << optarg << "\n";
