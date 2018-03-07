@@ -316,6 +316,17 @@ __device__ inline uint32_t linearizeBoxVectorIndex
 #endif
 
 
+int constexpr iFetchOrder0 = 0;
+int constexpr iFetchOrder1 = 3;
+int constexpr iFetchOrder2 = 6;
+int constexpr iFetchOrder3 = 2;
+int constexpr iFetchOrder4 = 5;
+int constexpr iFetchOrder5 = 8;
+int constexpr iFetchOrder6 = 1;
+int constexpr iFetchOrder7 = 4;
+int constexpr iFetchOrder8 = 7;
+
+
 /**
  * Checks the 3x3 grid one in front of the new position in the direction of the
  * move given by axis.
@@ -488,19 +499,25 @@ __device__ inline bool checkFront
     {
         case 0: //-+x
         {
-            is[2]  = is[7] | z0Abs;
-            is[5]  = is[7] | z0MDZ;
+            is[2]  = is[7] | z0MDZ;
+            is[5]  = is[7] | z0Abs;
             is[8]  = is[7] | z0PDZ;
-            is[0]  = is[2] | y0MDY;
-            is[1]  = is[2] | y0Abs;
-            is[2] |=         y0PDY;
-            is[3]  = is[5] | y0MDY;
-            is[4]  = is[5] | y0Abs;
-            is[5] |=         y0PDY;
-            is[6]  = is[8] | y0MDY;
-            is[7]  = is[8] | y0Abs;
-            is[8] |=         y0PDY;
+            is[0]  = is[2] | y0MDY; // (-1,-1)
+            is[1]  = is[2] | y0Abs; // ( 0,-1)
+            is[2] |=         y0PDY; // (+1,-1)
+            is[3]  = is[5] | y0MDY; // (-1, 0)
+            is[4]  = is[5] | y0Abs; // ( 0, 0)
+            is[5] |=         y0PDY; // (+1, 0)
+            is[6]  = is[8] | y0MDY; // (-1,+1)
+            is[7]  = is[8] | y0Abs; // ( 0,+1)
+            is[8] |=         y0PDY; // (+1,+1)
             break;
+            /**
+             * theoretically best orderings:
+             *  -x: (dy,dz), (-1,-1), (0,-1), (-1,0) | (1,-1), (0,0) (-1,1) | (1,0), (0,1), (1,1)
+             *  +x: (dy,dz), (-1,-1), (0,-1), (-1,0) | (1,-1), (0,0) (-1,1) | (1,0), (0,1), (1,1)
+             *                is[0]   is[1]    is[3]    is[2]  is[4]  is[6]   is[5]  is[7]  is[8]
+             */
         }
         case 1: //-+y
         {
@@ -535,15 +552,15 @@ __device__ inline bool checkFront
             break;
         }
     }
-    bool const isOccupied = tex1Dfetch< uint8_t >( texLattice, is[0] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[1] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[2] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[3] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[4] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[5] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[6] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[7] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[8] );
+    bool const isOccupied = tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder0 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder1 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder2 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder3 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder4 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder5 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder6 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder7 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder8 ] );
 #endif
     return isOccupied;
 }
@@ -583,33 +600,97 @@ __device__ inline bool checkFrontBitPacked
     switch ( axis >> intCUDA(1) )
     {
         case 0: //-+x
-            is[2]  = is[7] + z0Abs; is[5]  = is[7] + z0MDZ; is[8]  = is[7] + z0PDZ;
+            /* this line adds all three z directions */
+            is[2]  = is[7] + z0MDZ; is[5]  = is[7] + z0Abs; is[8]  = is[7] + z0PDZ;
+            /* now for all three results we generate all 3 different y positions */
             is[0]  = is[2] + y0MDY; is[1]  = is[2] + y0Abs; is[2] +=         y0PDY;
             is[3]  = is[5] + y0MDY; is[4]  = is[5] + y0Abs; is[5] +=         y0PDY;
             is[6]  = is[8] + y0MDY; is[7]  = is[8] + y0Abs; is[8] +=         y0PDY;
             break;
+            /**
+             * so the order for the 9 positions when moving in x direction is:
+             * @verbatim
+             * z ^
+             *   | 0 1 2
+             *   | 3 4 5
+             *   | 6 7 8
+             *   +------> y
+             * @endverbatim
+             */
         case 1: //-+y
             is[2]  = is[7] + z0MDZ; is[5]  = is[7] + z0Abs; is[8]  = is[7] + z0PDZ;
             is[0]  = is[2] + x0MDX; is[1]  = is[2] + x0Abs; is[2] +=         x0PDX;
             is[3]  = is[5] + x0MDX; is[4]  = is[5] + x0Abs; is[5] +=         x0PDX;
             is[6]  = is[8] + x0MDX; is[7]  = is[8] + x0Abs; is[8] +=         x0PDX;
             break;
+            /**
+             * @verbatim
+             * z ^
+             *   | 0 1 2
+             *   | 3 4 5
+             *   | 6 7 8
+             *   +------> x
+             * @endverbatim
+             */
         case 2: //-+z
             is[2]  = is[7] + y0MDY; is[5]  = is[7] + y0Abs; is[8]  = is[7] + y0PDY;
             is[0]  = is[2] + x0MDX; is[1]  = is[2] + x0Abs; is[2] +=         x0PDX;
             is[3]  = is[5] + x0MDX; is[4]  = is[5] + x0Abs; is[5] +=         x0PDX;
             is[6]  = is[8] + x0MDX; is[7]  = is[8] + x0Abs; is[8] +=         x0PDX;
             break;
+            /**
+             * @verbatim
+             * y ^
+             *   | 0 1 2
+             *   | 3 4 5
+             *   | 6 7 8
+             *   +------> x
+             * @endverbatim
+             */
     }
-    return bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[7] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[8] );
+    /**
+     * we might be able to profit from remporal caching by changing the fetch
+     * order ?! In that case the best should be in order of the z-curve.
+     * E.g. for a full 2x2x2 unit cell we have the order: A kind of problem is:
+     * we want to check a 3x3x1 front ... I don't think there is any easy way
+     * to derive a "correct" or "best order ... need to test all. There are
+     * 9! = 362880 possibilities ... ... ... I can't recompile all this every
+     * time, might have to to some templating and then loop ofer it but that
+     * could lead to code bloat ...
+     * First, manually try out if changing the order does change any thing in
+     * the first place ...
+     * The z curve in 3D is:
+     * @verbatim
+     *   i -> bin  -> (z,y,x)
+     *   0 -> 000b -> (0,0,0)
+     *   1 -> 001b -> (0,0,1)
+     *   2 -> 010b -> (0,1,0)
+     *   3 -> 011b -> (0,1,1)
+     *   4 -> 100b -> (1,0,0)
+     *   5 -> 101b -> (1,0,1)
+     *   6 -> 110b -> (1,1,0)
+     *   7 -> 111b -> (1,1,1)
+     *
+     *
+     *       .'+---+---+
+     *     .'  | 0 | 1 |       y
+     *   .'    +---+---+       ^
+     *  +---+---+2 | 3 |       |
+     *  | 4 | 5 |--+---+       +--> x
+     *  +---+---+    .'      .'
+     *  | 6 | 7 |  .'       L z
+     *  +---+---+.'
+     * @endverbatim
+     */
+    return bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder0 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder1 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder2 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder3 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder4 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder5 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder6 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder7 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder8 ] );
 }
 #endif
 
