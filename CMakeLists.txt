@@ -169,7 +169,7 @@ message( "CUDA_INCLUDE_DIR " )
 message( "Compile for sm_${CUDA_ARCH}" )
 # Instead of adding --compiler-bindir /usr/bin/g++-4.9 you should use cmake .. -DCUDA_HOST_COMPILER=/usr/bin/g++-4.9
 set( MINIMAL_CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}
-    -std=c++11 -Xcompiler -fPIC
+    -std=c++11 -Xcompiler -fPIC,-Wno-unused-parameter
     -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH}
 )
 set( BENCHMARK_CUDA_NVCC_FLAGS

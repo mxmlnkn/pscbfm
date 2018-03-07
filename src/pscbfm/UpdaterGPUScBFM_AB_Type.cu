@@ -30,6 +30,8 @@
 #   include <thrust/system/cuda/execution_policy.h>
 #   include <thrust/fill.h>
 #endif
+#include <thrust/sort.h>                    // sort_by_key
+#include <thrust/execution_policy.h>        // thrust::seq, thrust::host
 
 #include "Fundamental/BitsCompileTime.hpp"
 
@@ -1065,7 +1067,7 @@ void UpdaterGPUScBFM_AB_Type::initializeBondTable( void )
     if ( nAllowedBonds != 108 )
     {
         std::stringstream msg;
-        msg << "[" << __FILENAME__ << "::initialize] "
+        msg << "[" << __FILENAME__ << "::initializeBondTable] "
             << "Wrong bond-set! Expected 108 allowed bonds, but got " << nAllowedBonds << "\n";
         mLog( "Error" ) << msg.str();
         throw std::runtime_error( msg.str() );
@@ -1174,14 +1176,16 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
     }
 
     /* virtually sort groups into new array and save index mappings */
-    miToiNew.resize( mnAllMonomers   , UINT32_MAX );
-    miNewToi.resize( mnMonomersPadded, UINT32_MAX );
+    miToiNew.resize( mnAllMonomers );
     std::vector< size_t > iSubGroup = viSubGroupOffsets;   /* stores the next free index for each subgroup */
     for ( size_t i = 0u; i < mnAllMonomers; ++i )
-    {
         miToiNew[i] = iSubGroup[ mGroupIds[i] ]++;
-        miNewToi[ miToiNew[i] ] = i;
-    }
+
+    /* create convenience reverse mapping */
+    miNewToi.resize( mnMonomersPadded );
+    std::fill( miNewToi.begin(), miNewToi.end(), UINT32_MAX );
+    for ( size_t iOld = 0u; iOld < mnAllMonomers; ++iOld )
+        miNewToi[ miToiNew[ iOld ] ] = iOld;
 
     if ( mLog.isActive( "Info" ) )
     {
@@ -1199,6 +1203,47 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
         for ( auto const & x : mnElementsInGroup )
             mLog( "Info" ) << x << ", ";
         mLog( "Info" ) << "}\n";
+    }
+}
+
+void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
+{
+    /* sort monomers spatially to increase texture cache hit rates for the lattice lookup even more ... ... */
+    std::vector< uint32_t > miNewToiSpatial( mnMonomersPadded ); /* mapping new (monomers spatially sorted) index to old (species sorted) index */
+    for ( size_t iNew = 0u; iNew < miNewToiSpatial.size(); ++iNew )
+        miNewToiSpatial.at( iNew ) = iNew;
+
+    std::vector< uint32_t > vKeysZOrderLinearIds( mnMonomersPadded, UINT32_MAX );
+    for ( size_t iOld = 0u; iOld < mnAllMonomers; ++iOld )
+    {
+        vKeysZOrderLinearIds.at( miToiNew.at( iOld ) ) = linearizeBoxVectorIndex(
+            mPolymerSystem.at( 4 * iOld + 0 ),
+            mPolymerSystem.at( 4 * iOld + 1 ),
+            mPolymerSystem.at( 4 * iOld + 2 )
+        );
+    }
+    /* sort per sublists (each species) by key, not the whole list */
+    for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
+    {
+        thrust::sort_by_key( thrust::host,
+            vKeysZOrderLinearIds.begin() + viSubGroupOffsets.at( iSpecies ),
+            vKeysZOrderLinearIds.begin() + viSubGroupOffsets.at( iSpecies ) + mnElementsInGroup.at( iSpecies ),
+            miNewToiSpatial     .begin() + viSubGroupOffsets.at( iSpecies )
+        );
+    }
+
+    /* apply the newly found sorting into the total map just like function composition */
+    std::vector< size_t > iNewToiComposition( miNewToi.size(), UINT32_MAX );
+    for ( size_t iNew = 0u; iNew < miNewToiSpatial.size() ; ++iNew )
+        iNewToiComposition.at( iNew ) = miNewToi.at( miNewToiSpatial.at( iNew ) );
+    miNewToi = iNewToiComposition;
+
+    /* create/update convenience reverse mapping */
+    std::fill( miToiNew.begin(), miToiNew.end(), UINT32_MAX );
+    for ( auto iNew = 0u; iNew < miNewToi.size(); ++iNew )
+    {
+        if ( miNewToi.at( iNew ) != UINT32_MAX )
+            miToiNew.at( miNewToi.at( iNew ) ) = iNew;
     }
 }
 
@@ -1239,7 +1284,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
             << "pitch :" << mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ) << " elements = "
                          << mNeighborsSortedInfo.getMatrixPitchBytes   ( iSpecies ) << "B\n";
         }
-        mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::runSimulationOnGPU] map neighborIds to sorted array ... ";
+        mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors] map neighborIds to sorted array ... ";
     }
 
     {
@@ -1301,7 +1346,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
             if ( mNeighbors[i].size > MAX_CONNECTIVITY )
             {
                 std::stringstream msg;
-                msg << "[" << __FILENAME__ << "::initialize] "
+                msg << "[" << __FILENAME__ << "::initializeSortedNeighbors] "
                     << "This implementation allows max. 7 neighbors per monomer, "
                     << "but monomer " << i << " has " << mNeighbors[i].size << "\n";
                 mLog( "Error" ) << msg.str();
@@ -1321,7 +1366,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
     #endif
 
-    mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::runSimulationOnGPU] sort mPolymerSystem -> mPolymerSystemSorted ... ";
+    mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions] sort mPolymerSystem -> mPolymerSystemSorted ...\n";
     for ( size_t i = 0u; i < mnAllMonomers; ++i )
     {
         if ( i < 20 )
@@ -1484,6 +1529,42 @@ void UpdaterGPUScBFM_AB_Type::checkMonomerReorderMapping( void )
         mLog( "Error" ) << msg.str();
         throw std::runtime_error( msg.str() );
     }
+
+    /* check that it actually is the inverse */
+    for ( size_t iOld = 0u; iOld < miToiNew.size(); ++iOld )
+    {
+        if ( miToiNew.at( iOld ) == UINT32_MAX )
+            continue;
+
+        if ( miNewToi.at( miToiNew.at( iOld ) ) != iOld )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+                << "Roundtrip iOld -> iNew -> iOld not working for iOld= "
+                << iOld << " -> " << miToiNew.at( iOld ) << " -> "
+                << miNewToi.at( miToiNew.at( iOld ) );
+            mLog( "Error" ) << msg.str();
+            throw std::runtime_error( msg.str() );
+        }
+    }
+
+    /* check that it actually is the inverse the other way around */
+    for ( size_t iNew = 0u; iNew < miNewToi.size(); ++iNew )
+    {
+        if ( miNewToi.at( iNew ) == UINT32_MAX )
+            continue;
+
+        if ( miToiNew.at( miNewToi.at( iNew ) ) != iNew )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+                << "Roundtrip iNew -> iOld -> iNew not working for iNew= "
+                << iNew << " -> " << miNewToi.at( iNew ) << " -> "
+                << miToiNew.at( miNewToi.at( iNew ) );
+            mLog( "Error" ) << msg.str();
+            throw std::runtime_error( msg.str() );
+        }
+    }
 }
 
 void UpdaterGPUScBFM_AB_Type::initialize( void )
@@ -1502,6 +1583,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
 
     initializeBondTable();
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
+    checkMonomerReorderMapping();
+    initializeSpatialSorting(); /* miNewToi and miToiNew will be updated so that monomers are sorted spatially per species */
     checkMonomerReorderMapping();
     initializeSortedNeighbors();
     initializeSortedMonomerPositions();
