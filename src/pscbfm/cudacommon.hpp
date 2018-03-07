@@ -245,6 +245,8 @@ __device__ inline ulong4 operator+( ulong4 const & x, ulong4 const & y ) {
 
 #ifdef __CUDACC__
 
+#if ! defined( __CUDA_ARCH__ ) || ( __CUDA_ARCH__ >= 300 && __CUDA_ARCH__ < 700 )
+
 #define TMP_DEFINE_CUDA_SHFL_ARGS               \
 (                                               \
     int          const & var             ,      \
@@ -275,6 +277,7 @@ TMP_DEFINE_CUDA_SHFL_WRAPPERS( _xor  )
 #undef TMP_DEFINE_CUDA_SHFL_WRAPPERS
 #undef TMP_DEFINE_CUDA_SHFL_ARGS
 
+#endif
 
 __forceinline__ __device__ int cuda_ballot
 (
