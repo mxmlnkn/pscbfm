@@ -14,7 +14,7 @@
 //#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
 
 
-#include <algorithm>                        // fill, sort
+#include <algorithm>                        // fill, sort, count
 #include <chrono>                           // std::chrono::high_resolution_clock
 #include <cstdio>                           // printf
 #include <cstdlib>                          // exit
@@ -964,10 +964,11 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
 
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
  : mStream              ( 0 ),
-   nAllMonomers         ( 0 ),
    mLattice             ( NULL ),
    mLatticeOut          ( NULL ),
    mLatticeTmp          ( NULL ),
+   mnAllMonomers        ( 0 ),
+   mnMonomersPadded     ( 0 ),
    mPolymerSystemSorted ( NULL ),
    mPolymerFlags        ( NULL ),
    mNeighborsSorted     ( NULL ),
@@ -1035,31 +1036,25 @@ void UpdaterGPUScBFM_AB_Type::setGpu( int iGpuToUse )
     miGpuToUse = iGpuToUse;
 }
 
-
-void UpdaterGPUScBFM_AB_Type::initialize( void )
+#if 0
 {
-    if ( mLog( "Stats" ).isActive() )
+    /* a class helper for restructuring data */
+    template< typename >
+    class ShufflingVector
     {
-        // this is called in parallel it seems, therefore need to buffer it
-        std::stringstream msg; msg
-        << "[" << __FILENAME__ << "::initialize] The "
-        << "(" << mBoxX << "," << mBoxY << "," << mBoxZ << ")"
-        << " lattice is populated by " << nAllMonomers
-        << " resulting in a filling rate of "
-        << nAllMonomers / double( mBoxX * mBoxY * mBoxZ ) << "\n";
-        mLog( "Stats" ) << msg.str();
-    }
+        private:
+            size_t const n;
+            std::vector< size_t > miToiNew, miNewToi;
 
-    if ( mLatticeOut != NULL || mLatticeTmp != NULL )
-    {
-        std::stringstream msg;
-        msg << "[" << __FILENAME__ << "::initialize] "
-            << "Initialize was already called and may not be called again "
-            << "until cleanup was called!";
-        mLog( "Error" ) << msg.str();
-        throw std::runtime_error( msg.str() );
+        public:
+            inline ShufflingVector( size_t const & n )
+            :
     }
+}
+#endif
 
+void UpdaterGPUScBFM_AB_Type::initializeBondTable( void )
+{
     /* create the BondTable and copy it to constant memory */
     bool * tmpForbiddenBonds = (bool*) malloc( sizeof( bool ) * 512 );
     unsigned nAllowedBonds = 0;
@@ -1092,9 +1087,10 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     CUDA_ERROR( cudaMemcpyToSymbol( DXTableIntCUDA_d, tmp_DXTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DYTableIntCUDA_d, tmp_DYTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DZTableIntCUDA_d, tmp_DZTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
+}
 
-    /*************************** start of grouping ***************************/
-
+void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
+{
    mLog( "Info" ) << "Coloring graph ...\n";
     bool const bUniformColors = true; // setting this to true should yield more performance as the kernels are uniformly utilized
     mGroupIds = graphColoring< MonomerEdges const *, uint32_t, uint8_t >(
@@ -1108,7 +1104,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     {
         mLog( "Info" ) << "Checking difference between automatic and given coloring ... ";
         size_t nDifferent = 0;
-        for ( size_t iMonomer = 0u; iMonomer < std::max( (uint32_t) 20, this->nAllMonomers ); ++iMonomer )
+        for ( size_t iMonomer = 0u; iMonomer < std::max< size_t >( 20, mnAllMonomers ); ++iMonomer )
         {
             if ( mGroupIds.at( iMonomer )+1 != mAttributeSystem[ iMonomer ] )
             {
@@ -1144,7 +1140,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         mLog( "Stats" ) << "Found " << mnElementsInGroup.size() << " groups with the frequencies: ";
         for ( size_t i = 0u; i < mnElementsInGroup.size(); ++i )
         {
-            mLog( "Stats" ) << char( 'A' + (char) i ) << ": " << mnElementsInGroup[i] << "x (" << (float) mnElementsInGroup[i] / nAllMonomers * 100.f << "%), ";
+            mLog( "Stats" ) << char( 'A' + (char) i ) << ": " << mnElementsInGroup[i] << "x (" << (float) mnElementsInGroup[i] / mnAllMonomers * 100.f << "%), ";
         }
         mLog( "Stats" ) << "\n";
     }
@@ -1162,41 +1158,35 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
      * alignment with each group and need to fill up to nBytesAlignment for
      * all of them */
     /* virtual number of monomers which includes the additional alignment padding */
-    auto const nMonomersPadded = nAllMonomers + ( nElementsAlignment - 1u ) * mnElementsInGroup.size();
+    mnMonomersPadded = mnAllMonomers + ( nElementsAlignment - 1u ) * mnElementsInGroup.size();
     assert( mPolymerFlags == NULL );
-    mPolymerFlags = new MirroredVector< T_Flags >( nMonomersPadded, mStream );
+    mPolymerFlags = new MirroredVector< T_Flags >( mnMonomersPadded, mStream );
     CUDA_ERROR( cudaMemset( mPolymerFlags->gpu, 0, mPolymerFlags->nBytes ) );
-    /* Calculate offsets / prefix sum including the alignment */
-    assert( mPolymerSystemSorted == NULL );
-    mPolymerSystemSorted = new MirroredVector< vecIntCUDA >( nMonomersPadded, mStream );
-    #ifndef NDEBUG
-        std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
-    #endif
 
     /* calculate offsets to each aligned subgroup vector */
-    iSubGroupOffset.resize( mnElementsInGroup.size() );
-    iSubGroupOffset.at(0) = 0;
+    viSubGroupOffsets.resize( mnElementsInGroup.size() );
+    viSubGroupOffsets.at(0) = 0;
     for ( size_t i = 1u; i < mnElementsInGroup.size(); ++i )
     {
-        iSubGroupOffset[i] = iSubGroupOffset[i-1] +
+        viSubGroupOffsets[i] = viSubGroupOffsets[i-1] +
         ceilDiv( mnElementsInGroup[i-1], nElementsAlignment ) * nElementsAlignment;
-        assert( iSubGroupOffset[i] - iSubGroupOffset[i-1] >= mnElementsInGroup[i-1] );
+        assert( viSubGroupOffsets[i] - viSubGroupOffsets[i-1] >= mnElementsInGroup[i-1] );
     }
 
     /* virtually sort groups into new array and save index mappings */
-    iToiNew.resize( nAllMonomers   , UINT32_MAX );
-    iNewToi.resize( nMonomersPadded, UINT32_MAX );
-    std::vector< size_t > iSubGroup = iSubGroupOffset;   /* stores the next free index for each subgroup */
-    for ( size_t i = 0u; i < nAllMonomers; ++i )
+    miToiNew.resize( mnAllMonomers   , UINT32_MAX );
+    miNewToi.resize( mnMonomersPadded, UINT32_MAX );
+    std::vector< size_t > iSubGroup = viSubGroupOffsets;   /* stores the next free index for each subgroup */
+    for ( size_t i = 0u; i < mnAllMonomers; ++i )
     {
-        iToiNew[i] = iSubGroup[ mGroupIds[i] ]++;
-        iNewToi[ iToiNew[i] ] = i;
+        miToiNew[i] = iSubGroup[ mGroupIds[i] ]++;
+        miNewToi[ miToiNew[i] ] = i;
     }
 
     if ( mLog.isActive( "Info" ) )
     {
-        mLog( "Info" ) << "iSubGroupOffset = { ";
-        for ( auto const & x : iSubGroupOffset )
+        mLog( "Info" ) << "viSubGroupOffsets = { ";
+        for ( auto const & x : viSubGroupOffsets )
             mLog( "Info" ) << x << ", ";
         mLog( "Info" ) << "}\n";
 
@@ -1210,7 +1200,10 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
             mLog( "Info" ) << x << ", ";
         mLog( "Info" ) << "}\n";
     }
+}
 
+void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
+{
     /* adjust neighbor IDs to new sorted PolymerSystem and also sort that array.
      * Bonds are not supposed to change, therefore we don't need to push and
      * pop them each time we do something on the GPU! */
@@ -1220,7 +1213,7 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         mNeighborsSortedInfo.newMatrix( MAX_CONNECTIVITY, mnElementsInGroup[i] );
     mNeighborsSorted = new MirroredVector< uint32_t >( mNeighborsSortedInfo.getRequiredElements(), mStream );
     std::memset( mNeighborsSorted->host, 0, mNeighborsSorted->nBytes );
-    mNeighborsSortedSizes = new MirroredVector< uint8_t >( nMonomersPadded, mStream );
+    mNeighborsSortedSizes = new MirroredVector< uint8_t >( mnMonomersPadded, mStream );
     std::memset( mNeighborsSortedSizes->host, 0, mNeighborsSortedSizes->nBytes );
 
     if ( mLog.isActive( "Info" ) )
@@ -1253,29 +1246,29 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         size_t iSpecies = 0u;
         /* iterate over sorted instead of unsorted array so that calculating
          * the current species we are working on is easier */
-        for ( size_t i = 0u; i < iNewToi.size(); ++i )
+        for ( size_t i = 0u; i < miNewToi.size(); ++i )
         {
             /* check if we are already working on a new species */
-            if ( iSpecies+1 < iSubGroupOffset.size() &&
-                 i >= iSubGroupOffset[ iSpecies+1 ] )
+            if ( iSpecies+1 < viSubGroupOffsets.size() &&
+                 i >= viSubGroupOffsets[ iSpecies+1 ] )
             {
-                mLog( "Info" ) << "Currently at index " << i << "/" << iNewToi.size() << " and crossed offset of species " << iSpecies+1 << " at " << iSubGroupOffset[ iSpecies+1 ] << " therefore incrementing iSpecies\n";
+                mLog( "Info" ) << "Currently at index " << i << "/" << miNewToi.size() << " and crossed offset of species " << iSpecies+1 << " at " << viSubGroupOffsets[ iSpecies+1 ] << " therefore incrementing iSpecies\n";
                 ++iSpecies;
             }
             /* skip over padded indices */
-            if ( iNewToi[i] >= nAllMonomers )
+            if ( miNewToi[i] >= mnAllMonomers )
                 continue;
             /* actually to the sorting / copying and conversion */
-            mNeighborsSortedSizes->host[i] = mNeighbors[ iNewToi[i] ].size;
+            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi[i] ].size;
             auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-            for ( size_t j = 0u; j < mNeighbors[  iNewToi[i] ].size; ++j )
+            for ( size_t j = 0u; j < mNeighbors[  miNewToi[i] ].size; ++j )
             {
-                if ( i < 5 || std::abs( (long long int) i - iSubGroupOffset[ iSubGroupOffset.size()-1 ] ) < 5 )
+                if ( i < 5 || std::abs( (long long int) i - viSubGroupOffsets[ viSubGroupOffsets.size()-1 ] ) < 5 )
                 {
-                    mLog( "Info" ) << "Currently at index " << i << ": Writing into mNeighborsSorted->host[ " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " + " << j << " * " << pitch << " + " << i << "-" << iSubGroupOffset[ iSpecies ] << "] the value of old neighbor located at iToiNew[ mNeighbors[ iNewToi[i]=" << iNewToi[i] << " ] = iToiNew[ " << mNeighbors[ iNewToi[i] ].neighborIds[j] << " ] = " << iToiNew[ mNeighbors[ iNewToi[i] ].neighborIds[j] ] << " \n";
+                    mLog( "Info" ) << "Currently at index " << i << ": Writing into mNeighborsSorted->host[ " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " + " << j << " * " << pitch << " + " << i << "-" << viSubGroupOffsets[ iSpecies ] << "] the value of old neighbor located at miToiNew[ mNeighbors[ miNewToi[i]=" << miNewToi[i] << " ] = miToiNew[ " << mNeighbors[ miNewToi[i] ].neighborIds[j] << " ] = " << miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ] << " \n";
                 }
-                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - iSubGroupOffset[ iSpecies ] ) ] = iToiNew[ mNeighbors[ iNewToi[i] ].neighborIds[j] ];
-                //mNeighborsSorted->host[ iToiNew[i] ].neighborIds[j] = iToiNew[ mNeighbors[i].neighborIds[j] ];
+                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - viSubGroupOffsets[ iSpecies ] ) ] = miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ];
+                //mNeighborsSorted->host[ miToiNew[i] ].neighborIds[j] = miToiNew[ mNeighbors[i].neighborIds[j] ];
             }
         }
     }
@@ -1297,13 +1290,13 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
                 auto const iSorted = mNeighborsSorted->host[i].neighborIds[j];
                 if ( iSorted == UINT32_MAX )
                     throw std::runtime_error( "New index mapping not set!" );
-                if ( iSorted >= nMonomersPadded )
+                if ( iSorted >= mnMonomersPadded )
                     throw std::runtime_error( "New index out of range!" );
             }
         }*/
         /* does a similar check for the unsorted error which is still used
          * to create the property tag */
-        for ( uint32_t i = 0; i < nAllMonomers; ++i )
+        for ( uint32_t i = 0; i < mnAllMonomers; ++i )
         {
             if ( mNeighbors[i].size > MAX_CONNECTIVITY )
             {
@@ -1316,51 +1309,210 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
             }
         }
     }
+}
 
-    /************************** end of group sorting **************************/
 
+void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
+{
     /* sort groups into new array and save index mappings */
+    assert( mPolymerSystemSorted == NULL );
+    mPolymerSystemSorted = new MirroredVector< vecIntCUDA >( mnMonomersPadded, mStream );
+    #ifndef NDEBUG
+        std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
+    #endif
+
     mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::runSimulationOnGPU] sort mPolymerSystem -> mPolymerSystemSorted ... ";
-    for ( size_t i = 0u; i < nAllMonomers; ++i )
+    for ( size_t i = 0u; i < mnAllMonomers; ++i )
     {
         if ( i < 20 )
-            mLog( "Info" ) << "Write " << i << " to " << this->iToiNew[i] << "\n";
-        auto const pTarget = mPolymerSystemSorted->host + iToiNew[i];
+            mLog( "Info" ) << "Write " << i << " to " << this->miToiNew[i] << "\n";
+        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
         pTarget->x = mPolymerSystem[ 4*i+0 ];
         pTarget->y = mPolymerSystem[ 4*i+1 ];
         pTarget->z = mPolymerSystem[ 4*i+2 ];
         pTarget->w = mNeighbors[i].size;
     }
     mPolymerSystemSorted->pushAsync();
+}
 
-    checkSystem();
-
-    /* creating lattice */
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &mBoxXM1   , sizeof( mBoxXM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &mBoxYM1   , sizeof( mBoxYM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &mBoxZM1   , sizeof( mBoxZM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
+void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
+{
+    if ( mLatticeOut != NULL || mLatticeTmp != NULL )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::initializeLattices] "
+            << "Initialize was already called and may not be called again "
+            << "until cleanup was called!";
+        mLog( "Error" ) << msg.str();
+        throw std::runtime_error( msg.str() );
+    }
 
     mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
     CUDA_ERROR( cudaMemsetAsync( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream ) );
     /* populate latticeOut with monomers from mPolymerSystem */
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
-    for ( uint32_t t = 0; t < nAllMonomers; ++t )
+    for ( uint32_t iMonomer = 0; iMonomer < mnAllMonomers; ++iMonomer )
     {
-        mLatticeOut->host[ linearizeBoxVectorIndex( mPolymerSystem[ 4*t+0 ],
-                                                    mPolymerSystem[ 4*t+1 ],
-                                                    mPolymerSystem[ 4*t+2 ] ) ] = 1;
+        mLatticeOut->host[ linearizeBoxVectorIndex( mPolymerSystem[ 4 * iMonomer + 0 ],
+                                                    mPolymerSystem[ 4 * iMonomer + 1 ],
+                                                    mPolymerSystem[ 4 * iMonomer + 2 ] ) ] = 1;
     }
     mLatticeOut->pushAsync();
 
     mLog( "Info" )
-        << "Filling Rate: " << nAllMonomers << " "
-        << "(=" << nAllMonomers / 1024 << "*1024+" << nAllMonomers % 1024 << ") "
+        << "Filling Rate: " << mnAllMonomers << " "
+        << "(=" << mnAllMonomers / 1024 << "*1024+" << mnAllMonomers % 1024 << ") "
         << "particles in a (" << mBoxX << "," << mBoxY << "," << mBoxZ << ") box "
-        << "=> " << 100. * nAllMonomers / ( mBoxX * mBoxY * mBoxZ ) << "%\n"
+        << "=> " << 100. * mnAllMonomers / ( mBoxX * mBoxY * mBoxZ ) << "%\n"
         << "Note: densest packing is: 25% -> in this case it might be more reasonable to actually iterate over the spaces where particles can move to, keeping track of them instead of iterating over the particles\n";
+}
+
+void UpdaterGPUScBFM_AB_Type::checkMonomerReorderMapping( void )
+{
+    if ( miToiNew.size() != mnAllMonomers )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+            << "miToiNew must have " << mnAllMonomers << " elements "
+            << "(as many as monomers), but it has " << miToiNew.size() << "!";
+        mLog( "Error" ) << msg.str();
+        throw std::runtime_error( msg.str() );
+    }
+
+    if ( miNewToi.size() != mnMonomersPadded )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+            << "miNewToi must have " << mnMonomersPadded << " elements "
+            << "(as many as monomers), but it has " << miNewToi.size() << "!";
+        mLog( "Error" ) << msg.str();
+        throw std::runtime_error( msg.str() );
+    }
+
+    auto const nMonomers       = miToiNew.size();
+    auto const nMonomersPadded = miNewToi.size();
+
+    /* check that the mapping is bijective if we exclude
+     * entries equal to UINT32_MAX */
+    std::vector< bool > vIsMapped( nMonomers, false );
+
+    for ( size_t iNew = 0u; iNew < miNewToi.size(); ++iNew )
+    {
+        auto const iOld = miNewToi.at( iNew );
+
+        if ( iOld == UINT32_MAX )
+            continue;
+
+        if ( ! ( /* 0 <= iOld && */ iOld < nMonomers ) )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+                << "New index " << iNew << " is mapped back to " << iOld
+                << ", which is out of range [0," << nMonomers-1 << "]";
+            mLog( "Error" ) << msg.str();
+            throw std::runtime_error( msg.str() );
+        }
+
+        if ( vIsMapped.at( iOld ) )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+                << "When trying to test whether we can copy back the monomer "
+                << "at the sorted index " << iNew << ", it was found that the "
+                << "index " << iOld << " in the unsorted array was already "
+                << "written to, i.e., we would loose information on copy-back!";
+            mLog( "Error" ) << msg.str();
+            throw std::runtime_error( msg.str() );
+        }
+        vIsMapped.at( iOld ) = true;
+    }
+
+    size_t const nMapped = std::count( vIsMapped.begin(), vIsMapped.end(), true );
+    if ( nMapped != nMonomers )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+            << "The mapping created e.g. by the sorting by species is missing "
+            << "some monomers! Only " << nMapped << " / " << nMonomers
+            << " are actually mapped to the new sorted array!";
+        mLog( "Error" ) << msg.str();
+        throw std::runtime_error( msg.str() );
+    }
+
+    std::vector< bool > vIsMappedTo( nMonomersPadded, false );
+
+    for ( size_t iOld = 0u; iOld < miToiNew.size(); ++iOld )
+    {
+        auto const iNew = miToiNew.at( iOld );
+
+        if ( iNew == UINT32_MAX )
+            continue;
+
+        if ( ! ( /* 0 <= iNew && */ iNew < mnMonomersPadded ) )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+                << "Old index " << iOld << " maps to " << iNew << ", which is "
+                << "out of range [0," << mnMonomersPadded-1 << "]";
+            mLog( "Error" ) << msg.str();
+            throw std::runtime_error( msg.str() );
+        }
+
+        if ( vIsMappedTo.at( iNew ) )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+                << "When trying to test whether we can copy back the monomer "
+                << "at the sorted index " << iNew << ", it was found that the "
+                << "index " << iOld << " in the unsorted array was already "
+                << "written to, i.e., we would loose information on copy-back!";
+            mLog( "Error" ) << msg.str();
+            throw std::runtime_error( msg.str() );
+        }
+        vIsMappedTo.at( iNew ) = true;
+    }
+
+    size_t const nMappedTo = std::count( vIsMappedTo.begin(), vIsMappedTo.end(), true );
+    if ( nMappedTo != nMonomers )
+    {
+        std::stringstream msg;
+        msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
+            << "The mapping created e.g. by the sorting by species is missing "
+            << "some monomers! The sorted array only has " << nMappedTo << " / "
+            << nMonomers << " monomers!";
+        mLog( "Error" ) << msg.str();
+        throw std::runtime_error( msg.str() );
+    }
+}
+
+void UpdaterGPUScBFM_AB_Type::initialize( void )
+{
+    if ( mLog( "Stats" ).isActive() )
+    {
+        // this is called in parallel it seems, therefore need to buffer it
+        std::stringstream msg; msg
+        << "[" << __FILENAME__ << "::initialize] The "
+        << "(" << mBoxX << "," << mBoxY << "," << mBoxZ << ")"
+        << " lattice is populated by " << mnAllMonomers
+        << " resulting in a filling rate of "
+        << mnAllMonomers / double( mBoxX * mBoxY * mBoxZ ) << "\n";
+        mLog( "Stats" ) << msg.str();
+    }
+
+    initializeBondTable();
+    initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
+    checkMonomerReorderMapping();
+    initializeSortedNeighbors();
+    initializeSortedMonomerPositions();
+    checkSystem();
+    initializeLattices();
+
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &mBoxXM1   , sizeof( mBoxXM1    ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &mBoxYM1   , sizeof( mBoxYM1    ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &mBoxZM1   , sizeof( mBoxZM1    ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
 
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
     CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
@@ -1375,12 +1527,12 @@ void UpdaterGPUScBFM_AB_Type::copyBondSet
 
 void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t const rnAllMonomers )
 {
-    if ( this->nAllMonomers != 0 || mAttributeSystem != NULL ||
+    if ( mnAllMonomers != 0 || mAttributeSystem != NULL ||
          mPolymerSystemSorted != NULL || mNeighborsSorted != NULL )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::setNrOfAllMonomers] "
-            << "Number of Monomers already set to " << nAllMonomers << "!\n"
+            << "Number of Monomers already set to " << mnAllMonomers << "!\n"
             << "Or some arrays were already allocated "
             << "(mAttributeSystem=" << (void*) mAttributeSystem
             << ", mPolymerSystemSorted" << (void*) mPolymerSystemSorted
@@ -1388,17 +1540,17 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t const rnAllMonomers )
         throw std::runtime_error( msg.str() );
     }
 
-    this->nAllMonomers = rnAllMonomers;
-    mAttributeSystem = new int32_t[ nAllMonomers ];
+    mnAllMonomers = rnAllMonomers;
+    mAttributeSystem = new int32_t[ mnAllMonomers ];
     if ( mAttributeSystem == NULL )
     {
         std::stringstream msg;
-        msg << "[" << __FILENAME__ << "::setNrOfAllMonomers] mAttributeSystem is still NULL after call to 'new int32_t[ " << nAllMonomers << " ]!\n";
+        msg << "[" << __FILENAME__ << "::setNrOfAllMonomers] mAttributeSystem is still NULL after call to 'new int32_t[ " << mnAllMonomers << " ]!\n";
         mLog( "Error" ) << msg.str();
         throw std::runtime_error( msg.str() );
     }
-    mPolymerSystem.resize( nAllMonomers*4 );
-    mNeighbors    .resize( nAllMonomers   );
+    mPolymerSystem.resize( mnAllMonomers*4 );
+    mNeighbors    .resize( mnAllMonomers   );
     std::memset( &mNeighbors[0], 0, mNeighbors.size() * sizeof( mNeighbors[0] ) );
 }
 
@@ -1436,7 +1588,7 @@ void UpdaterGPUScBFM_AB_Type::setAttribute( uint32_t i, int32_t attribute )
         if ( mAttributeSystem == NULL )
             throw std::runtime_error( "[UpdaterGPUScBFM_AB_Type.h::setAttribute] mAttributeSystem is NULL! Did you call setNrOfAllMonomers, yet?" );
         std::cerr << "set " << i << " to attribute " << attribute << "\n";
-        if ( ! ( i < nAllMonomers ) )
+        if ( ! ( i < mnAllMonomers ) )
             throw std::invalid_argument( "[UpdaterGPUScBFM_AB_Type.h::setAttribute] i out of range!" );
     #endif
     mAttributeSystem[i] = attribute;
@@ -1551,7 +1703,7 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
 void UpdaterGPUScBFM_AB_Type::populateLattice()
 {
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
-    for ( size_t i = 0; i < nAllMonomers; ++i )
+    for ( size_t i = 0; i < mnAllMonomers; ++i )
     {
         auto const j = linearizeBoxVectorIndex( mPolymerSystem[ 4*i+0 ],
                                                 mPolymerSystem[ 4*i+1 ],
@@ -1606,7 +1758,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     /*
      Lattice is an array of size Box_X*Box_Y*Box_Z. PolymerSystem holds the monomer positions which I strongly guess are supposed to be in the range 0<=x<Box_X. If I see correctly, then this part checks for excluded volume by occupying a 2x2x2 cube for each monomer in Lattice and then counting the total occupied cells and compare it to the theoretical value of nMonomers * 8. But Lattice seems to be too small for that kinda usage! I.e. for two particles, one being at x=0 and the other being at x=Box_X-1 this test should return that the excluded volume condition is not met! Therefore the effective box size is actually (Box_X-1,Box_X-1,Box_Z-1) which in my opinion should be a bug ??? */
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
-    for ( uint32_t i = 0; i < nAllMonomers; ++i )
+    for ( uint32_t i = 0; i < mnAllMonomers; ++i )
     {
         int32_t const & x = mPolymerSystem[ 4*i   ];
         int32_t const & y = mPolymerSystem[ 4*i+1 ];
@@ -1639,12 +1791,12 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     unsigned nOccupied = 0;
     for ( unsigned i = 0u; i < mBoxX * mBoxY * mBoxZ; ++i )
         nOccupied += mLattice[i] != 0;
-    if ( ! ( nOccupied == nAllMonomers * 8 ) )
+    if ( ! ( nOccupied == mnAllMonomers * 8 ) )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::~checkSystem" << "] "
             << "Occupation count in mLattice is wrong! Expected 8*nMonomers="
-            << 8 * nAllMonomers << " occupied cells, but got " << nOccupied;
+            << 8 * mnAllMonomers << " occupied cells, but got " << nOccupied;
         throw std::runtime_error( msg.str() );
     }
 
@@ -1652,7 +1804,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
      * Check bonds i.e. that |dx|<=3 and whether it is allowed by the given
      * bond set
      */
-    for ( unsigned i = 0; i < nAllMonomers; ++i )
+    for ( unsigned i = 0; i < mnAllMonomers; ++i )
     for ( unsigned iNeighbor = 0; iNeighbor < mNeighbors[i].size; ++iNeighbor )
     {
         /* calculate the bond vector between the neighbor and this particle
@@ -1706,11 +1858,11 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     auto constexpr nFilters = 5;
     if ( mLog.isActive( "Stats" ) )
     {
-        sums .resize( nSpecies, std::vector< double >( nFilters, 0            ) );
-        sums2.resize( nSpecies, std::vector< double >( nFilters, 0            ) );
-        mins .resize( nSpecies, std::vector< double >( nFilters, nAllMonomers ) );
-        maxs .resize( nSpecies, std::vector< double >( nFilters, 0            ) );
-        ns   .resize( nSpecies, std::vector< double >( nFilters, 0            ) );
+        sums .resize( nSpecies, std::vector< double >( nFilters, 0             ) );
+        sums2.resize( nSpecies, std::vector< double >( nFilters, 0             ) );
+        mins .resize( nSpecies, std::vector< double >( nFilters, mnAllMonomers ) );
+        maxs .resize( nSpecies, std::vector< double >( nFilters, 0             ) );
+        ns   .resize( nSpecies, std::vector< double >( nFilters, 0             ) );
         /* ns needed because we need to know how often each group was advanced */
         vFiltered.resize( nFilters );
         CUDA_ERROR( cudaMalloc( &dpFiltered, nFilters * sizeof( *dpFiltered ) ) );
@@ -1801,7 +1953,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             <<< nBlocks, nThreads, 0, mStream >>>(
                 mPolymerSystemSorted->gpu,
                 mPolymerFlags->gpu,
-                iSubGroupOffset[ iSpecies ],
+                viSubGroupOffsets[ iSpecies ],
                 mLatticeTmp->gpu,
                 mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
                 mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
@@ -1816,7 +1968,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 <<< nBlocks, nThreads, 0, mStream >>>(
                     mPolymerSystemSorted->gpu,
                     mPolymerFlags->gpu,
-                    iSubGroupOffset[ iSpecies ],
+                    viSubGroupOffsets[ iSpecies ],
                     mLatticeTmp->gpu,
                     mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
                     mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
@@ -1831,8 +1983,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMPerformSpeciesAndApply
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
-                    mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
                     mLatticeTmp->texture
@@ -1842,8 +1994,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMPerformSpecies
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
-                    mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
                     mLatticeTmp->texture
@@ -1854,8 +2006,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelCountFilteredPerform
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
-                    mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
                     mLatticeTmp->texture,
@@ -1880,8 +2032,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMZeroArraySpecies
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + iSubGroupOffset[ iSpecies ],
-                    mPolymerFlags->gpu + iSubGroupOffset[ iSpecies ],
+                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeTmp->gpu,
                     mnElementsInGroup[ iSpecies ]
                 );
@@ -2058,15 +2210,15 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         mLog( "Benchmark" )
         << "run time (GPU): " << nMonteCarloSteps << "\n"
         << "mcs = " << nMonteCarloSteps  << "  speed [performed monomer try and move/s] = MCS*N/t: "
-        << nMonteCarloSteps * ( nAllMonomers / dt )  << "     runtime[s]:" << dt << "\n";
+        << nMonteCarloSteps * ( mnAllMonomers / dt )  << "     runtime[s]:" << dt << "\n";
     }
 
     /* untangle reordered array so that LeMonADE can use it again */
-    for ( size_t i = 0u; i < nAllMonomers; ++i )
+    for ( size_t i = 0u; i < mnAllMonomers; ++i )
     {
-        auto const pTarget = mPolymerSystemSorted->host + iToiNew[i];
+        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
         if ( i < 10 )
-            mLog( "Info" ) << "Copying back " << i << " from " << iToiNew[i] << "\n";
+            mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
         mPolymerSystem[ 4*i+0 ] = pTarget->x;
         mPolymerSystem[ 4*i+1 ] = pTarget->y;
         mPolymerSystem[ 4*i+2 ] = pTarget->z;

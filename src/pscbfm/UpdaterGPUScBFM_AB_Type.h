@@ -133,8 +133,6 @@ private:
     bool mForbiddenBonds[512];
     //int BondAsciiArray[512];
 
-    uint32_t nAllMonomers;
-
     /**
      * Vector of length boxX * boxY * boxZ. Actually only contains 0 if
      * the cell / lattice point is empty or 1 if it is occupied by a monomer
@@ -168,6 +166,7 @@ private:
      * The saved location is used as the lower left front corner when
      * populating the lattice with 2x2x2 boxes representing the monomers
      */
+    size_t mnAllMonomers;
     std::vector< intCUDA > mPolymerSystem;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array
@@ -179,6 +178,7 @@ private:
      * Note how this struct of array leads to yet another alignment problem
      * I think I need AlignedMatrices for this, too :(
      */
+    size_t mnMonomersPadded;
     MirroredVector< vecIntCUDA > * mPolymerSystemSorted;
     /**
      * These are to be used for storing the flags and chosen direction of
@@ -208,9 +208,9 @@ private:
     int32_t * mAttributeSystem;
     std::vector< uint8_t > mGroupIds; /* for each monomer stores the color / attribute / group ID/tag */
     std::vector< size_t > mnElementsInGroup;
-    std::vector< size_t > iToiNew;   /* for each old monomer stores the new position */
-    std::vector< size_t > iNewToi;   /* for each new monomer stores the old position */
-    std::vector< size_t > iSubGroupOffset; /* stores offsets (in number of elements not bytes) to each aligned subgroup vector in mPolymerSystemSorted */
+    std::vector< size_t > miToiNew;   /* for each old monomer stores the new position */
+    std::vector< size_t > miNewToi;   /* for each new monomer stores the old position */
+    std::vector< size_t > viSubGroupOffsets; /* stores offsets (in number of elements not bytes) to each aligned subgroup vector in mPolymerSystemSorted */
 
     /* needed to decide whether we can even check autocoloring with given one */
     bool bSetAttributeCalled;
@@ -237,7 +237,7 @@ private:
      * stores the IDs of all neighbors as is needed to check for the bond
      * set / length restrictions.
      * But after the sorting of mPolymerSystem the IDs also changed.
-     * And as I don't want to push iToiNew and iNewToi to the GPU instead
+     * And as I don't want to push miToiNew and miNewToi to the GPU instead
      * I just change the IDs for all neighbors. Plus the array itself gets
      * rearranged to the new AAA...BBB...CC... ordering
      *
@@ -332,6 +332,16 @@ public:
      * => normally setNrOfAllMonomers and setGpu schould be in the constructor ... :S
      */
 
+private:
+    void initializeBondTable();
+    void initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
+    void initializeSpatialSorting(); /* miNewToi and miToiNew will be updated so that monomers are sorted spatially per species */
+    void initializeSortedNeighbors();
+    void initializeSortedMonomerPositions();
+    void initializeLattices();
+    void checkMonomerReorderMapping();
+
+public:
     void initialize();
     inline bool execute(){ return true; }
     void cleanup();
