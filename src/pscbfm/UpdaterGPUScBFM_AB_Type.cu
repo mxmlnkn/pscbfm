@@ -1584,8 +1584,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     initializeBondTable();
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
     checkMonomerReorderMapping();
-    initializeSpatialSorting(); /* miNewToi and miToiNew will be updated so that monomers are sorted spatially per species */
-    checkMonomerReorderMapping();
+    //initializeSpatialSorting(); /* miNewToi and miToiNew will be updated so that monomers are sorted spatially per species */
+    //checkMonomerReorderMapping();
     initializeSortedNeighbors();
     initializeSortedMonomerPositions();
     checkSystem();
