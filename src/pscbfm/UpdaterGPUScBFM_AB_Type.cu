@@ -566,24 +566,6 @@ __device__ inline bool checkFront
 }
 
 #ifdef USE_BIT_PACKING
-
-__device__ inline void unsafePart1by2p3_d( uint32_t & i, uint32_t & j, uint32_t & k )
-//__device__ inline uint32_t unsafePart1by2p3_d( uint32_t n )
-{
-    i = ( i | ( i << 16 ) ) & 0xff0000ff;
-    j = ( j | ( j << 16 ) ) & 0xff0000ff;
-    k = ( k | ( k << 16 ) ) & 0xff0000ff;
-    i = ( i | ( i <<  8 ) ) & 0x0300f00f;
-    j = ( j | ( j <<  8 ) ) & 0x0300f00f;
-    k = ( k | ( k <<  8 ) ) & 0x0300f00f;
-    i = ( i | ( i <<  4 ) ) & 0x030c30c3;
-    j = ( j | ( j <<  4 ) ) & 0x030c30c3;
-    k = ( k | ( k <<  4 ) ) & 0x030c30c3;
-    i = ( i | ( i <<  2 ) ) & 0x09249249;
-    j = ( j | ( j <<  2 ) ) & 0x09249249;
-    k = ( k | ( k <<  2 ) ) & 0x09249249;
-}
-
 __device__ inline bool checkFrontBitPacked
 (
     cudaTextureObject_t const & texLattice,
@@ -593,24 +575,15 @@ __device__ inline bool checkFrontBitPacked
     intCUDA             const & axis
 )
 {
-    auto x0MDX = ( x0 - uint32_t(1) ) & dcBoxXM1;
-    auto x0Abs = ( x0               ) & dcBoxXM1;
-    auto x0PDX = ( x0 + uint32_t(1) ) & dcBoxXM1;
-    unsafePart1by2p3_d( x0MDX, x0Abs, x0PDX );
-    auto y0MDY = ( y0 - uint32_t(1) ) & dcBoxYM1;
-    auto y0Abs = ( y0               ) & dcBoxYM1;
-    auto y0PDY = ( y0 + uint32_t(1) ) & dcBoxYM1;
-    unsafePart1by2p3_d( y0MDY, y0Abs, y0PDY );
-    y0MDY <<= 1;
-    y0Abs <<= 1;
-    y0PDY <<= 1;
-    auto z0MDZ = ( z0 - uint32_t(1) ) & dcBoxZM1;
-    auto z0Abs = ( z0               ) & dcBoxZM1;
-    auto z0PDZ = ( z0 + uint32_t(1) ) & dcBoxZM1;
-    unsafePart1by2p3_d( z0MDZ, z0Abs, z0PDZ );
-    z0MDZ <<= 2;
-    z0Abs <<= 2;
-    z0PDZ <<= 2;
+    auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
+    auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
+    auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
+    auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
+    auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
+    auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
+    auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
+    auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
+    auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
 
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
