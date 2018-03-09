@@ -1854,7 +1854,14 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     initializeBondTable();
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
     checkMonomerReorderMapping();
-    //initializeSpatialSorting(); /* miNewToi and miToiNew will be updated so that monomers are sorted spatially per species */
+    auto const tSpatialSorting0 = std::chrono::high_resolution_clock::now();
+    //initializeSpatialSorting();
+    {
+        auto const tSpatialSorting1 = std::chrono::high_resolution_clock::now();
+        std::stringstream sBuffered;
+        sBuffered << "tSpatialSorting = " << std::chrono::duration<double>( tSpatialSorting1 - tSpatialSorting0 ).count() << "s\n";
+        mLog( "Benchmark" ) << sBuffered.str();
+    }
     //checkMonomerReorderMapping();
     initializeSortedNeighbors();
     initializeSortedMonomerPositions();
