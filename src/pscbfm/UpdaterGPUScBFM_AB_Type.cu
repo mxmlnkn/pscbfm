@@ -57,6 +57,9 @@ __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbid
 __device__ __constant__ uint32_t DXTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 __device__ __constant__ uint32_t DYTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 __device__ __constant__ uint32_t DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DXTable2_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DYTable2_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+__device__ __constant__ uint32_t DZTable2_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 /**
  * If intCUDA is different from uint32_t, then this second table prevents
  * expensive type conversions, but both tables are still needed, the
@@ -359,7 +362,8 @@ __device__ inline bool checkFront
     uint32_t            const & x0        ,
     uint32_t            const & y0        ,
     uint32_t            const & z0        ,
-    intCUDA             const & axis
+    intCUDA             const & axis      ,
+    uint32_t          * const   iNewFront = NULL
 )
 {
 #if 0
@@ -482,17 +486,17 @@ __device__ inline bool checkFront
     #if defined( USE_ZCURVE_FOR_LATTICE )
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
-            case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
+            case 0: is[7] = ( x0 + 2*dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + 2*dy ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + 2*dz ) & dcBoxZM1; break;
         }
         is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
     #else
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] =   ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
-            case 2: is[7] = ( ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+            case 0: is[7] =   ( x0 + dx2 ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + dy2 ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + dz2 ) & dcBoxZM1 ) << dcBoxXYLog2; break;
         }
     #endif
     switch ( axis >> intCUDA(1) )
@@ -552,6 +556,8 @@ __device__ inline bool checkFront
             break;
         }
     }
+    if ( iNewFront != NULL )
+        *iNewFront = is[7];
     bool const isOccupied = tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder0 ] ) |
                             tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder1 ] ) |
                             tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder2 ] ) |
@@ -565,6 +571,7 @@ __device__ inline bool checkFront
     return isOccupied;
 }
 
+
 #ifdef USE_BIT_PACKING
 __device__ inline bool checkFrontBitPacked
 (
@@ -572,7 +579,8 @@ __device__ inline bool checkFrontBitPacked
     uint32_t            const & x0        ,
     uint32_t            const & y0        ,
     uint32_t            const & z0        ,
-    intCUDA             const & axis
+    intCUDA             const & axis      ,
+    uint32_t          * const   iOldPos = NULL
 )
 {
     auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
@@ -589,6 +597,9 @@ __device__ inline bool checkFrontBitPacked
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
     auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
 
+    if ( iOldPos != NULL )
+        *iOldPos = x0Abs + y0Abs + z0Abs;
+
     uint32_t is[9];
     switch ( axis >> 1 )
     {
@@ -596,16 +607,6 @@ __device__ inline bool checkFrontBitPacked
         case 1: is[7] = ( y0 + dy + dy ) & dcBoxYM1; break;
         case 2: is[7] = ( z0 + dz + dz ) & dcBoxZM1; break;
     }
-
-auto constexpr iFetchOrder0 = 0;
-auto constexpr iFetchOrder1 = 3;
-auto constexpr iFetchOrder2 = 6;
-auto constexpr iFetchOrder3 = 2;
-auto constexpr iFetchOrder4 = 5;
-auto constexpr iFetchOrder5 = 8;
-auto constexpr iFetchOrder6 = 1;
-auto constexpr iFetchOrder7 = 4;
-auto constexpr iFetchOrder8 = 7;
 
 #define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 0
 
@@ -1007,7 +1008,8 @@ __global__ void kernelSimulationScBFMCheckSpecies
                     break;
                 }
             }
-            if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
+            uint32_t iNewPos;
+            if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction, &iNewPos ) )
             {
                 /* everything fits so perform move on temporary lattice */
                 /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
@@ -1076,8 +1078,7 @@ __global__ void kernelCountFilteredCheck
                     break;
                 }
             }
-
-            if ( checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
+            if ( checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction, NULL ) )
             {
                 atomicAdd( dpFiltered+2, 1 );
                 if ( ! forbiddenBond ) /* this is the more real relative use-case where invalid bonds are already filtered out */
@@ -1117,7 +1118,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
     #ifdef USE_BIT_PACKING_TMP_LATTICE
         if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
     #else
-        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, NULL ) )
     #endif
             continue;
 
@@ -1153,21 +1154,22 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 
         auto const r0 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+        uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
-        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
     #else
         if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
     #endif
             continue;
 
+        dpLattice[ iOldPos ] = 0;
         CudaVec4< intCUDA >::value_type const r1 = {
             intCUDA( r0.x + DXTableIntCUDA_d[ direction ] ),
             intCUDA( r0.y + DYTableIntCUDA_d[ direction ] ),
             intCUDA( r0.z + DZTableIntCUDA_d[ direction ] ), 0
         };
+        dpLattice[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z )  ] = 1;
         /* If possible, perform move now on normal lattice */
-        dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
-        dpLattice[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
         dpPolymerSystem[ iMonomer ] = r1;
     }
 }
@@ -1191,7 +1193,7 @@ __global__ void kernelCountFilteredPerform
 
         auto const data = dpPolymerSystem[ iMonomer ];
         auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
-        if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
+        if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction, NULL ) )
             atomicAdd( dpFiltered+4, size_t(1) );
     }
 }
@@ -1363,6 +1365,12 @@ void UpdaterGPUScBFM_AB_Type::initializeBondTable( void )
     CUDA_ERROR( cudaMemcpyToSymbol( DXTable_d, tmp_DXTable, sizeof( tmp_DXTable ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DYTable_d, tmp_DYTable, sizeof( tmp_DXTable ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DZTable_d, tmp_DZTable, sizeof( tmp_DXTable ) ) );
+    uint32_t tmp_DXTable2[6] = { 0u-2u,2,  0,0,  0,0 };
+    uint32_t tmp_DYTable2[6] = {  0,0, 0u-2u,2,  0,0 };
+    uint32_t tmp_DZTable2[6] = {  0,0,  0,0, 0u-2u,2 };
+    CUDA_ERROR( cudaMemcpyToSymbol( DXTable2_d, tmp_DXTable2, sizeof( tmp_DXTable2 ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DYTable2_d, tmp_DYTable2, sizeof( tmp_DXTable2 ) ) );
+    CUDA_ERROR( cudaMemcpyToSymbol( DZTable2_d, tmp_DZTable2, sizeof( tmp_DXTable2 ) ) );
     intCUDA tmp_DXTableIntCUDA[6] = { -1,1,  0,0,  0,0 };
     intCUDA tmp_DYTableIntCUDA[6] = {  0,0, -1,1,  0,0 };
     intCUDA tmp_DZTableIntCUDA[6] = {  0,0,  0,0, -1,1 };
