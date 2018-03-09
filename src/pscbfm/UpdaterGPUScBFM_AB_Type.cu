@@ -316,6 +316,17 @@ __device__ inline uint32_t linearizeBoxVectorIndex
 #endif
 
 
+int constexpr iFetchOrder0 = 0;
+int constexpr iFetchOrder1 = 3;
+int constexpr iFetchOrder2 = 6;
+int constexpr iFetchOrder3 = 2;
+int constexpr iFetchOrder4 = 5;
+int constexpr iFetchOrder5 = 8;
+int constexpr iFetchOrder6 = 1;
+int constexpr iFetchOrder7 = 4;
+int constexpr iFetchOrder8 = 7;
+
+
 /**
  * Checks the 3x3 grid one in front of the new position in the direction of the
  * move given by axis.
@@ -440,62 +451,116 @@ __device__ inline bool checkFront
         #undef TMP_FETCH
     }
 #else
-    auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
-    auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
-    auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
-    auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
-    auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
-    auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
-    auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
-    auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
-    auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
+    #if defined( USE_ZCURVE_FOR_LATTICE )
+        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
+        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
+        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
+        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
+        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
+        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
+        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
+    #else
+        auto const x0Abs  =   ( x0               ) & dcBoxXM1;
+        auto const x0PDX  =   ( x0 + uint32_t(1) ) & dcBoxXM1;
+        auto const x0MDX  =   ( x0 - uint32_t(1) ) & dcBoxXM1;
+        auto const y0Abs  = ( ( y0               ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0PDY  = ( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0MDY  = ( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const z0Abs  = ( ( z0               ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0PDZ  = ( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+    #endif
 
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
     auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
 
     uint32_t is[9];
+
+    #if defined( USE_ZCURVE_FOR_LATTICE )
+        switch ( axis >> intCUDA(1) )
+        {
+            case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
+        }
+        is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
+    #else
+        switch ( axis >> intCUDA(1) )
+        {
+            case 0: is[7] =   ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+        }
+    #endif
     switch ( axis >> intCUDA(1) )
     {
-        case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
-        case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
-        case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
+        case 0: //-+x
+        {
+            is[2]  = is[7] | z0MDZ;
+            is[5]  = is[7] | z0Abs;
+            is[8]  = is[7] | z0PDZ;
+            is[0]  = is[2] | y0MDY; // (-1,-1)
+            is[1]  = is[2] | y0Abs; // ( 0,-1)
+            is[2] |=         y0PDY; // (+1,-1)
+            is[3]  = is[5] | y0MDY; // (-1, 0)
+            is[4]  = is[5] | y0Abs; // ( 0, 0)
+            is[5] |=         y0PDY; // (+1, 0)
+            is[6]  = is[8] | y0MDY; // (-1,+1)
+            is[7]  = is[8] | y0Abs; // ( 0,+1)
+            is[8] |=         y0PDY; // (+1,+1)
+            break;
+            /**
+             * theoretically best orderings:
+             *  -x: (dy,dz), (-1,-1), (0,-1), (-1,0) | (1,-1), (0,0) (-1,1) | (1,0), (0,1), (1,1)
+             *  +x: (dy,dz), (-1,-1), (0,-1), (-1,0) | (1,-1), (0,0) (-1,1) | (1,0), (0,1), (1,1)
+             *                is[0]   is[1]    is[3]    is[2]  is[4]  is[6]   is[5]  is[7]  is[8]
+             */
+        }
+        case 1: //-+y
+        {
+            is[2]  = is[7] | z0MDZ;
+            is[5]  = is[7] | z0Abs;
+            is[8]  = is[7] | z0PDZ;
+            is[0]  = is[2] | x0MDX;
+            is[1]  = is[2] | x0Abs;
+            is[2] |=         x0PDX;
+            is[3]  = is[5] | x0MDX;
+            is[4]  = is[5] | x0Abs;
+            is[5] |=         x0PDX;
+            is[6]  = is[8] | x0MDX;
+            is[7]  = is[8] | x0Abs;
+            is[8] |=         x0PDX;
+            break;
+        }
+        case 2: //-+z
+        {
+            is[2]  = is[7] | y0MDY;
+            is[5]  = is[7] | y0Abs;
+            is[8]  = is[7] | y0PDY;
+            is[0]  = is[2] | x0MDX;
+            is[1]  = is[2] | x0Abs;
+            is[2] |=         x0PDX;
+            is[3]  = is[5] | x0MDX;
+            is[4]  = is[5] | x0Abs;
+            is[5] |=         x0PDX;
+            is[6]  = is[8] | x0MDX;
+            is[7]  = is[8] | x0Abs;
+            is[8] |=         x0PDX;
+            break;
+        }
     }
-    is[8] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
-
-    auto const direction = axis >> 1;
-    auto const isX = ( axis & 6 ) == 0;
-    is[6] = isX ? y0MDY : x0MDX;
-    is[7] = isX ? y0Abs : x0Abs;
-    auto const b0p1 = ( axis & 6 ) == 0 ? y0PDY : x0PDX;
-    if ( direction == 2 ) {
-        is[2] = is[8] + y0MDY; is[5] = is[8] + y0Abs; is[8] += y0PDY;
-    } else {
-        is[2] = is[8] + z0MDZ; is[5] = is[8] + z0Abs; is[8] += z0PDZ;
-    }
-    is[0]  = is[2] + is[6];
-    is[3]  = is[5] + is[6];
-    is[6] += is[8];
-    is[1]  = is[2] + is[7];
-
-    if ( ( tex1Dfetch< uint8_t >( texLattice, is[0] ) +
-           tex1Dfetch< uint8_t >( texLattice, is[3] ) +
-           tex1Dfetch< uint8_t >( texLattice, is[6] ) +
-           tex1Dfetch< uint8_t >( texLattice, is[1] ) ) )
-        return true;
-
-    is[4]  = is[5] + is[7];
-    is[7] += is[8];
-    is[2] += b0p1;
-    is[5] += b0p1;
-    is[8] += b0p1;
-
-    bool const isOccupied =
-        tex1Dfetch< uint8_t >( texLattice, is[2] ) +
-        tex1Dfetch< uint8_t >( texLattice, is[5] ) +
-        tex1Dfetch< uint8_t >( texLattice, is[8] ) +
-        tex1Dfetch< uint8_t >( texLattice, is[4] ) +
-        tex1Dfetch< uint8_t >( texLattice, is[7] );
+    bool const isOccupied = tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder0 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder1 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder2 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder3 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder4 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder5 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder6 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder7 ] ) |
+                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder8 ] );
 #endif
     return isOccupied;
 }
