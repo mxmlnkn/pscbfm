@@ -565,6 +565,76 @@ __device__ inline bool checkFront
     return isOccupied;
 }
 
+__device__ inline bool checkFrontLUT
+(
+    cudaTextureObject_t const & texLattice,
+    uint32_t            const & x0        ,
+    uint32_t            const & y0        ,
+    uint32_t            const & z0        ,
+    intCUDA             const & axis      ,
+    uint32_t    const * const & smDiluteBitsLUT
+)
+{
+    auto const x0Abs  = smDiluteBitsLUT[ ( x0               ) & dcBoxXM1 ];
+    auto const x0PDX  = smDiluteBitsLUT[ ( x0 + uint32_t(1) ) & dcBoxXM1 ];
+    auto const x0MDX  = smDiluteBitsLUT[ ( x0 - uint32_t(1) ) & dcBoxXM1 ];
+    auto const y0Abs  = smDiluteBitsLUT[ ( y0               ) & dcBoxYM1 ] << 1;
+    auto const y0PDY  = smDiluteBitsLUT[ ( y0 + uint32_t(1) ) & dcBoxYM1 ] << 1;
+    auto const y0MDY  = smDiluteBitsLUT[ ( y0 - uint32_t(1) ) & dcBoxYM1 ] << 1;
+    auto const z0Abs  = smDiluteBitsLUT[ ( z0               ) & dcBoxZM1 ] << 2;
+    auto const z0PDZ  = smDiluteBitsLUT[ ( z0 + uint32_t(1) ) & dcBoxZM1 ] << 2;
+    auto const z0MDZ  = smDiluteBitsLUT[ ( z0 - uint32_t(1) ) & dcBoxZM1 ] << 2;
+
+    auto const dx = DXTable_d[ axis ];   // 2*axis-1
+    auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
+    auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
+
+    uint32_t is[9];
+    switch ( axis >> intCUDA(1) )
+    {
+        case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
+        case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
+        case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
+    }
+    is[8] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
+
+    auto const direction = axis >> 1;
+    auto const isX = ( axis & 6 ) == 0;
+    is[6] = isX ? y0MDY : x0MDX;
+    is[7] = isX ? y0Abs : x0Abs;
+    auto const b0p1 = ( axis & 6 ) == 0 ? y0PDY : x0PDX;
+    if ( direction == 2 ) {
+        is[2] = is[8] + y0MDY; is[5] = is[8] + y0Abs; is[8] += y0PDY;
+    } else {
+        is[2] = is[8] + z0MDZ; is[5] = is[8] + z0Abs; is[8] += z0PDZ;
+    }
+    is[0]  = is[2] + is[6];
+    is[3]  = is[5] + is[6];
+    is[6] += is[8];
+    is[1]  = is[2] + is[7];
+
+    if ( ( tex1Dfetch< uint8_t >( texLattice, is[0] ) +
+           tex1Dfetch< uint8_t >( texLattice, is[3] ) +
+           tex1Dfetch< uint8_t >( texLattice, is[6] ) +
+           tex1Dfetch< uint8_t >( texLattice, is[1] ) ) )
+        return true;
+
+    is[4]  = is[5] + is[7];
+    is[7] += is[8];
+    is[2] += b0p1;
+    is[5] += b0p1;
+    is[8] += b0p1;
+
+    bool const isOccupied =
+        tex1Dfetch< uint8_t >( texLattice, is[2] ) +
+        tex1Dfetch< uint8_t >( texLattice, is[5] ) +
+        tex1Dfetch< uint8_t >( texLattice, is[8] ) +
+        tex1Dfetch< uint8_t >( texLattice, is[4] ) +
+        tex1Dfetch< uint8_t >( texLattice, is[7] );
+
+    return isOccupied;
+}
+
 #ifdef USE_BIT_PACKING
 __device__ inline bool checkFrontBitPacked
 (
@@ -960,9 +1030,14 @@ __global__ void kernelSimulationScBFMCheckSpecies
     uint8_t     const * const __restrict__ dpNeighborsSizes        ,
     uint32_t            const              nMonomers               ,
     uint32_t            const              rSeed                   ,
-    cudaTextureObject_t const              texLatticeRefOut
+    cudaTextureObject_t const              texLatticeRefOut        ,
+    uint32_t          * const              dpDiluteBitsLUT
 )
 {
+    __shared__ uint32_t smDiluteBitsLUT[ 1024 ];
+    for ( auto i = threadIdx.x; i < 1024; i += blockDim.x )
+        smDiluteBitsLUT[ i ] = dpDiluteBitsLUT[ i ];
+
     uint32_t rn;
     int iGrid = 0;
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1007,7 +1082,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
                     break;
                 }
             }
-            if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
+            if ( ! forbiddenBond && ! checkFrontLUT( texLatticeRefOut, r0.x, r0.y, r0.z, direction, smDiluteBitsLUT ) )
             {
                 /* everything fits so perform move on temporary lattice */
                 /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
@@ -2217,6 +2292,11 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
     auto const nSpecies = mnElementsInGroup.size();
 
+    MirroredVector< uint32_t > vDiluteBitsLUT( 1024 );
+    for ( uint32_t i = 0u; i < 1024; ++i )
+        vDiluteBitsLUT.host[ i ] = diluteBits< uint32_t, 2 >( i );
+    vDiluteBitsLUT.push();
+
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
      *   0: bonds, 1: volume exclusion, 2: volume exclusion (parallel)
@@ -2279,7 +2359,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 #ifdef AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
         0, true, vnThreadsToTry.size() <= 1, false
 #else
-        2, true, true, true
+        3, true, true, true
 #endif
     } );
     cudaEvent_t tOneGpuLoop0, tOneGpuLoop1;
@@ -2329,7 +2409,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
                 mNeighborsSortedSizes->gpu,
                 mnElementsInGroup[ iSpecies ], seed,
-                mLatticeOut->texture
+                mLatticeOut->texture,
+                vDiluteBitsLUT.gpu
             );
 
             if ( mLog.isActive( "Stats" ) )
