@@ -568,10 +568,10 @@ __device__ inline bool checkFront
 #ifdef USE_BIT_PACKING
 __device__ inline bool checkFrontBitPacked
 (
-    uint8_t           * const __restrict__ & texLattice,
-    uint32_t            const & x0  ,
-    uint32_t            const & y0  ,
-    uint32_t            const & z0  ,
+    cudaTextureObject_t const & texLattice,
+    uint32_t            const & x0        ,
+    uint32_t            const & y0        ,
+    uint32_t            const & z0        ,
     intCUDA             const & axis
 )
 {
@@ -621,10 +621,10 @@ __device__ inline bool checkFrontBitPacked
     is[6] += is[8];
     is[1]  = is[2] + is[7];
 
-    if ( ( bitPackedGet< uint8_t >( texLattice, is[0] ) +
-           bitPackedGet< uint8_t >( texLattice, is[3] ) +
-           bitPackedGet< uint8_t >( texLattice, is[6] ) +
-           bitPackedGet< uint8_t >( texLattice, is[1] ) ) )
+    if ( ( bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) ) )
         return true;
 
     is[4]  = is[5] + is[7];
@@ -633,11 +633,11 @@ __device__ inline bool checkFrontBitPacked
     is[5] += b0p1;
     is[8] += b0p1;
 
-    return bitPackedGet< uint8_t >( texLattice, is[2] ) +
-           bitPackedGet< uint8_t >( texLattice, is[5] ) +
-           bitPackedGet< uint8_t >( texLattice, is[8] ) +
-           bitPackedGet< uint8_t >( texLattice, is[4] ) +
-           bitPackedGet< uint8_t >( texLattice, is[7] );
+    return bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[8] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[7] );
 #elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 5 // try to reduce registers and times even mroe
     auto const direction = axis >> 1;
     auto const isX = ( axis & 6 ) == 0;
@@ -753,9 +753,9 @@ __device__ inline bool checkFrontBitPacked
             is[6]  = is[8] + x0MDX;
             break;
     }
-    if ( ( bitPackedGet< uint8_t >( texLattice, is[0] ) +
-           bitPackedGet< uint8_t >( texLattice, is[3] ) +
-           bitPackedGet< uint8_t >( texLattice, is[6] ) ) )
+    if ( ( bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) ) )
         return true;
 
     switch ( axis >> 1 )
@@ -776,12 +776,12 @@ __device__ inline bool checkFrontBitPacked
             is[7]  = is[8] + x0Abs; is[8] += x0PDX;
             break;
     }
-    return bitPackedGet< uint8_t >( texLattice, is[2] ) +
-           bitPackedGet< uint8_t >( texLattice, is[5] ) +
-           bitPackedGet< uint8_t >( texLattice, is[8] ) +
-           bitPackedGet< uint8_t >( texLattice, is[1] ) +
-           bitPackedGet< uint8_t >( texLattice, is[4] ) +
-           bitPackedGet< uint8_t >( texLattice, is[7] );
+    return bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[8] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[7] );
 #elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 0
     switch ( axis >> 1 )
     {
@@ -870,15 +870,15 @@ __device__ inline bool checkFrontBitPacked
      * @endverbatim
      */
 #if ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 1 ) && ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 6 )
-    return bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder0 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder1 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder2 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder3 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder4 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder5 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder6 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder7 ] ) +
-           bitPackedGet< uint8_t >( texLattice, is[ iFetchOrder8 ] );
+    return bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder0 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder1 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder2 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder3 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder4 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder5 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder6 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder7 ] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder8 ] );
 #endif
 }
 #endif
@@ -1091,7 +1091,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
     T_Flags             * const __restrict__ dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLattice      ,
     uint32_t              const              nMonomers      ,
-    uint8_t             * const __restrict__ texLatticeTmp
+    cudaTextureObject_t   const              texLatticeTmp
 )
 {
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1131,7 +1131,7 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
     T_Flags             * const __restrict__ dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLattice      ,
     uint32_t              const              nMonomers      ,
-    uint8_t             * const __restrict__ texLatticeTmp
+    cudaTextureObject_t   const              texLatticeTmp
 )
 {
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2347,7 +2347,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
-                    mLatticeTmp->gpu
+                    mLatticeTmp->texture
                 );
             }
             else
@@ -2358,7 +2358,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
-                    mLatticeTmp->gpu
+                    mLatticeTmp->texture
                 );
             }
 
