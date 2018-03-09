@@ -592,9 +592,9 @@ __device__ inline bool checkFrontBitPacked
     uint32_t is[9];
     switch ( axis >> 1 )
     {
-        case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
-        case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
-        case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
+        case 0: is[7] = ( x0 + dx + dx ) & dcBoxXM1; break;
+        case 1: is[7] = ( y0 + dy + dy ) & dcBoxYM1; break;
+        case 2: is[7] = ( z0 + dz + dz ) & dcBoxZM1; break;
     }
 
 #define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 6
