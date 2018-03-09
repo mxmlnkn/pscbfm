@@ -590,14 +590,200 @@ __device__ inline bool checkFrontBitPacked
     auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
 
     uint32_t is[9];
-    switch ( axis >> intCUDA(1) )
+    switch ( axis >> 1 )
     {
         case 0: is[7] = ( x0 + decltype(dx)(2) * dx ) & dcBoxXM1; break;
         case 1: is[7] = ( y0 + decltype(dy)(2) * dy ) & dcBoxYM1; break;
         case 2: is[7] = ( z0 + decltype(dz)(2) * dz ) & dcBoxZM1; break;
     }
-    is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
-    switch ( axis >> intCUDA(1) )
+
+#define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 6
+
+#if ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 5 ) || ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 6 )
+    is[8] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
+#else
+    is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
+#endif
+
+#if CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 6 // same as version 5, but with preemptive return like version 1
+    auto const direction = axis >> 1;
+    auto const isX = ( axis & 6 ) == 0;
+    is[6] = isX ? y0MDY : x0MDX;
+    is[7] = isX ? y0Abs : x0Abs;
+    auto const b0p1 = ( axis & 6 ) == 0 ? y0PDY : x0PDX;
+    if ( direction == 2 ) {
+        is[2] = is[8] + y0MDY; is[5] = is[8] + y0Abs; is[8] += y0PDY;
+    } else {
+        is[2] = is[8] + z0MDZ; is[5] = is[8] + z0Abs; is[8] += z0PDZ;
+    }
+    is[0]  = is[2] + is[6];
+    is[3]  = is[5] + is[6];
+    is[6] += is[8];
+    is[1]  = is[2] + is[7];
+
+    if ( ( bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) ) )
+        return true;
+
+    is[4]  = is[5] + is[7];
+    is[7] += is[8];
+    is[2] += b0p1;
+    is[5] += b0p1;
+    is[8] += b0p1;
+
+    return bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[8] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[7] );
+#elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 5 // try to reduce registers and times even mroe
+    auto const direction = axis >> 1;
+    auto const isX = ( axis & 6 ) == 0;
+    is[6] = isX ? y0MDY : x0MDX;
+    is[7] = isX ? y0Abs : x0Abs;
+    auto const b0p1 = ( axis & 6 ) == 0 ? y0PDY : x0PDX;
+    if ( direction == 2 ) {
+        is[2] = is[8] + y0MDY; is[5] = is[8] + y0Abs; is[8] += y0PDY;
+    } else {
+        is[2] = is[8] + z0MDZ; is[5] = is[8] + z0Abs; is[8] += z0PDZ;
+    }
+    is[0]  = is[2] + is[6];
+    is[3]  = is[5] + is[6];
+    is[6] += is[8];
+    is[1]  = is[2] + is[7];
+    is[4]  = is[5] + is[7];
+    is[7] += is[8];
+    is[2] += b0p1;
+    is[5] += b0p1;
+    is[8] += b0p1;
+#elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 4 // ternary operator version
+    auto const direction = axis >> 1;
+    auto const a0m1 = direction == 2 ? y0MDY : z0MDZ;
+    auto const a0   = direction == 2 ? y0Abs : z0Abs;
+    auto const a0p1 = direction == 2 ? y0PDY : z0PDZ;
+    auto const b0m1 = direction == 0 ? y0MDY : x0MDX;
+    auto const b0   = direction == 0 ? y0Abs : x0Abs;
+    auto const b0p1 = direction == 0 ? y0PDY : x0PDX;
+    is[2] = is[7] + a0m1; is[5] = is[7] + a0; is[8]  = is[7] + a0p1;
+    is[0] = is[2] + b0m1; is[1] = is[2] + b0; is[2] += b0p1;
+    is[3] = is[5] + b0m1; is[4] = is[5] + b0; is[5] += b0p1;
+    is[6] = is[8] + b0m1; is[7] = is[8] + b0; is[8] += b0p1;
+#elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 3 // this version tries to do the calculations unbranched and reorders the calculations in order to hopefully use less registers
+    uint32_t a0m1,a0,a0p1;
+    if ( axis >> 1 == 2 )
+    {
+        a0m1 = y0MDY;
+        a0   = y0Abs;
+        a0p1 = y0PDY;
+    }
+    else
+    {
+        a0m1 = z0MDZ;
+        a0   = z0Abs;
+        a0p1 = z0PDZ;
+    }
+    is[2] = is[7] + a0m1; is[5]  = is[7] + a0; is[8]  = is[7] + a0p1;
+    uint32_t b0m1,b0,b0p1;
+    if ( axis >> 1 == 0 )
+    {
+        b0m1 = y0MDY;
+        b0   = y0Abs;
+        b0p1 = y0PDY;
+    }
+    else
+    {
+        b0m1 = x0MDX;
+        b0   = x0Abs;
+        b0p1 = x0PDX;
+    }
+    is[0] = is[2] + b0m1; is[1] = is[2] + b0;
+    is[3] = is[5] + b0m1; is[4] = is[5] + b0;
+    is[6] = is[8] + b0m1; is[7] = is[8] + b0;
+    is[2] += b0p1;
+    is[5] += b0p1;
+    is[8] += b0p1;
+#elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 2 // version which at least tries to reduce the large switch to two smaller if-else's
+    if ( axis >> 1 == 2 )
+    {
+        is[2] = is[7] + y0MDY; is[5] = is[7] + y0Abs; is[8] = is[7] + y0PDY;
+    }
+    else
+    {
+        is[2] = is[7] + z0MDZ; is[5] = is[7] + z0Abs; is[8] = is[7] + z0PDZ;
+    }
+    if ( axis >> 1 == 0 )
+    {
+        is[0] = is[2] + y0MDY; is[1]  = is[2] + y0Abs;
+        is[3] = is[5] + y0MDY; is[4]  = is[5] + y0Abs;
+        is[6] = is[8] + y0MDY; is[7]  = is[8] + y0Abs;
+        is[2] += y0PDY;
+        is[5] += y0PDY;
+        is[8] += y0PDY;
+    }
+    else
+    {
+        is[0] = is[2] + x0MDX; is[1]  = is[2] + x0Abs;
+        is[3] = is[5] + x0MDX; is[4]  = is[5] + x0Abs;
+        is[6] = is[8] + x0MDX; is[7]  = is[8] + x0Abs;
+        is[2] += x0PDX;
+        is[5] += x0PDX;
+        is[8] += x0PDX;
+    }
+#elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 1 // this version tries to implement a preemptive return
+    switch ( axis >> 1 )
+    {
+        case 0: //-+x
+            is[2]  = is[7] + z0MDZ; is[5]  = is[7] + z0Abs; is[8]  = is[7] + z0PDZ;
+            is[0]  = is[2] + y0MDY;
+            is[3]  = is[5] + y0MDY;
+            is[6]  = is[8] + y0MDY;
+            break;
+        case 1: //-+y
+            is[2]  = is[7] + z0MDZ; is[5]  = is[7] + z0Abs; is[8]  = is[7] + z0PDZ;
+            is[0]  = is[2] + x0MDX;
+            is[3]  = is[5] + x0MDX;
+            is[6]  = is[8] + x0MDX;
+            break;
+        case 2: //-+z
+            is[2]  = is[7] + y0MDY; is[5]  = is[7] + y0Abs; is[8]  = is[7] + y0PDY;
+            is[0]  = is[2] + x0MDX;
+            is[3]  = is[5] + x0MDX;
+            is[6]  = is[8] + x0MDX;
+            break;
+    }
+    if ( ( bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) ) )
+        return true;
+
+    switch ( axis >> 1 )
+    {
+        case 0: //-+x
+            is[1]  = is[2] + y0Abs; is[2] += y0PDY;
+            is[4]  = is[5] + y0Abs; is[5] += y0PDY;
+            is[7]  = is[8] + y0Abs; is[8] += y0PDY;
+            break;
+        case 1: //-+y
+            is[1]  = is[2] + x0Abs; is[2] += x0PDX;
+            is[4]  = is[5] + x0Abs; is[5] += x0PDX;
+            is[7]  = is[8] + x0Abs; is[8] += x0PDX;
+            break;
+        case 2: //-+z
+            is[1]  = is[2] + x0Abs; is[2] += x0PDX;
+            is[4]  = is[5] + x0Abs; is[5] += x0PDX;
+            is[7]  = is[8] + x0Abs; is[8] += x0PDX;
+            break;
+    }
+    return bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[8] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
+           bitPackedTextureGet< uint8_t >( texLattice, is[7] );
+#elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 0
+    switch ( axis >> 1 )
     {
         case 0: //-+x
             /* this line adds all three z directions */
@@ -648,6 +834,7 @@ __device__ inline bool checkFrontBitPacked
              * @endverbatim
              */
     }
+#endif
     /**
      * we might be able to profit from remporal caching by changing the fetch
      * order ?! In that case the best should be in order of the z-curve.
@@ -682,6 +869,7 @@ __device__ inline bool checkFrontBitPacked
      *  +---+---+.'
      * @endverbatim
      */
+#if ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 1 ) && ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 6 )
     return bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder0 ] ) +
            bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder1 ] ) +
            bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder2 ] ) +
@@ -691,6 +879,7 @@ __device__ inline bool checkFrontBitPacked
            bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder6 ] ) +
            bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder7 ] ) +
            bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder8 ] );
+#endif
 }
 #endif
 
