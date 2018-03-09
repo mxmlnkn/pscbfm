@@ -597,7 +597,17 @@ __device__ inline bool checkFrontBitPacked
         case 2: is[7] = ( z0 + dz + dz ) & dcBoxZM1; break;
     }
 
-#define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 6
+auto constexpr iFetchOrder0 = 0;
+auto constexpr iFetchOrder1 = 3;
+auto constexpr iFetchOrder2 = 6;
+auto constexpr iFetchOrder3 = 2;
+auto constexpr iFetchOrder4 = 5;
+auto constexpr iFetchOrder5 = 8;
+auto constexpr iFetchOrder6 = 1;
+auto constexpr iFetchOrder7 = 4;
+auto constexpr iFetchOrder8 = 7;
+
+#define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 0
 
 #if ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 5 ) || ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 6 )
     is[8] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
