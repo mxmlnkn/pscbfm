@@ -494,9 +494,9 @@ __device__ inline bool checkFront
     #else
         switch ( axis >> intCUDA(1) )
         {
-            case 0: is[7] =   ( x0 + dx2 ) & dcBoxXM1; break;
-            case 1: is[7] = ( ( y0 + dy2 ) & dcBoxYM1 ) << dcBoxXLog2; break;
-            case 2: is[7] = ( ( z0 + dz2 ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+            case 0: is[7] =   ( x0 + 2*dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + 2+dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
         }
     #endif
     switch ( axis >> intCUDA(1) )
@@ -953,12 +953,12 @@ using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
     vecIntCUDA  const * const __restrict__ dpPolymerSystem         ,
-    T_Flags           * const __restrict__ dpPolymerFlags          ,
+    T_Flags           * const              dpPolymerFlags          ,
     uint32_t            const              iOffset                 ,
     uint8_t           * const __restrict__ dpLatticeTmp            ,
-    uint32_t    const * const __restrict__ dpNeighbors             ,
+    uint32_t    const * const              dpNeighbors             ,
     uint32_t            const              rNeighborsPitchElements ,
-    uint8_t     const * const __restrict__ dpNeighborsSizes        ,
+    uint8_t     const * const              dpNeighborsSizes        ,
     uint32_t            const              nMonomers               ,
     uint32_t            const              rSeed                   ,
     cudaTextureObject_t const              texLatticeRefOut
@@ -1033,16 +1033,16 @@ __global__ void kernelSimulationScBFMCheckSpecies
 __global__ void kernelCountFilteredCheck
 (
     vecIntCUDA       const * const __restrict__ dpPolymerSystem        ,
-    T_Flags          const * const __restrict__ dpPolymerFlags         ,
+    T_Flags          const * const              dpPolymerFlags         ,
     uint32_t                 const              iOffset                ,
     uint8_t          const * const __restrict__ /* dpLatticeTmp */     ,
-    uint32_t         const * const __restrict__ dpNeighbors            ,
+    uint32_t         const * const              dpNeighbors            ,
     uint32_t                 const              rNeighborsPitchElements,
-    uint8_t          const * const __restrict__ dpNeighborsSizes       ,
+    uint8_t          const * const              dpNeighborsSizes       ,
     uint32_t                 const              nMonomers              ,
     uint32_t                 const              rSeed                  ,
     cudaTextureObject_t      const              texLatticeRefOut       ,
-    unsigned long long int * const __restrict__ dpFiltered
+    unsigned long long int * const              dpFiltered
 )
 {
     uint32_t rn;
@@ -1098,8 +1098,8 @@ __global__ void kernelCountFilteredCheck
  */
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    vecIntCUDA    const * const __restrict__ dpPolymerSystem,
-    T_Flags             * const __restrict__ dpPolymerFlags ,
+    vecIntCUDA    const * const              dpPolymerSystem,
+    T_Flags             * const              dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLattice      ,
     uint32_t              const              nMonomers      ,
     cudaTextureObject_t   const              texLatticeTmp
@@ -1138,8 +1138,8 @@ __global__ void kernelSimulationScBFMPerformSpecies
 
 __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 (
-    vecIntCUDA          * const __restrict__ dpPolymerSystem,
-    T_Flags             * const __restrict__ dpPolymerFlags ,
+    vecIntCUDA          * const              dpPolymerSystem,
+    T_Flags             * const              dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLattice      ,
     uint32_t              const              nMonomers      ,
     cudaTextureObject_t   const              texLatticeTmp
@@ -1176,12 +1176,12 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 
 __global__ void kernelCountFilteredPerform
 (
-    vecIntCUDA       const * const __restrict__ dpPolymerSystem  ,
-    T_Flags          const * const __restrict__ dpPolymerFlags   ,
+    vecIntCUDA       const * const              dpPolymerSystem  ,
+    T_Flags          const * const              dpPolymerFlags   ,
     uint8_t          const * const __restrict__ /* dpLattice */  ,
     uint32_t                 const              nMonomers        ,
     cudaTextureObject_t      const              texLatticeTmp    ,
-    unsigned long long int * const __restrict__ dpFiltered
+    unsigned long long int * const              dpFiltered
 )
 {
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1215,8 +1215,8 @@ __global__ void kernelCountFilteredPerform
  */
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
-    vecIntCUDA          * const __restrict__ dpPolymerSystem,
-    T_Flags       const * const __restrict__ dpPolymerFlags ,
+    vecIntCUDA          * const              dpPolymerSystem,
+    T_Flags       const * const              dpPolymerFlags ,
     uint8_t             * const __restrict__ dpLatticeTmp   ,
     uint32_t              const              nMonomers
 )
