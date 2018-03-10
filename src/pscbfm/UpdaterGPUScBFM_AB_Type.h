@@ -13,6 +13,7 @@
 #include <cstdio>                           // printf
 #include <cstdint>                          // uint32_t, size_t
 #include <stdexcept>
+#include <type_traits>                      // make_unsigned
 
 #include <cuda_runtime_api.h>               // cudaStream_t, cudaDeviceProp
 #include <LeMonADE/utility/RandomNumberGenerators.h>
@@ -138,10 +139,12 @@ public:
      * do as written above and possibly make the algorithm EVEN FASTER as the
      * memory bandwidth could be reduced even more!
      */
-    using T_BoxSize         = uint64_t; // uint32_t // should be unsigned!
-    using T_Coordinate      = int32_t; // int64_t // should be signed!
-    using T_CoordinateCuda  = int16_t; // int32_t (int8_t, uint8_t does not work for a 256^3 box :S ??? )
-    using T_CoordinatesCuda = CudaVec4< T_CoordinateCuda >::value_type;
+    using T_BoxSize          = uint64_t; // uint32_t // should be unsigned!
+    using T_Coordinate       = int32_t; // int64_t // should be signed!
+    using T_CoordinateCuda   = int16_t; // int32_t (int8_t, uint8_t does not work for a 256^3 box :S ??? )
+    using T_UCoordinateCuda  = std::make_unsigned< T_CoordinateCuda >::type;
+    using T_CoordinatesCuda  = CudaVec4< T_CoordinateCuda >::value_type;
+    using T_UCoordinatesCuda = CudaVec4< T_CoordinateCuda >::value_type;
     /* could also be uint8_t if you know you only have 256 different
      * species at maximum. For the autocoloring this is implicitly true,
      * but not so if the user manually specifies colors! */
@@ -195,6 +198,7 @@ private:
      */
     size_t mnAllMonomers;
     std::vector< T_Coordinate > mPolymerSystem;
+    std::vector< T_Coordinate > mviPolymerSystemVirtualBox;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array
      * in order to split neighbors size off into extra array, thereby also
@@ -206,7 +210,7 @@ private:
      * I think I need AlignedMatrices for this, too :(
      */
     size_t mnMonomersPadded;
-    MirroredVector< T_CoordinatesCuda > * mPolymerSystemSorted;
+    MirroredVector< T_UCoordinatesCuda > * mPolymerSystemSorted;
     /**
      * These are to be used for storing the flags and chosen direction of
      * the old property tag.
@@ -221,8 +225,8 @@ private:
     MirroredVector< T_Flags > * mPolymerFlags;
 
     static auto constexpr nBytesAlignment    = 512u;
-    static auto constexpr nElementsAlignment = nBytesAlignment / ( 4u * sizeof( T_CoordinateCuda ) );
-    static_assert( nBytesAlignment == nElementsAlignment * 4u * sizeof( T_CoordinateCuda ),
+    static auto constexpr nElementsAlignment = nBytesAlignment / ( 4u * sizeof( T_UCoordinateCuda ) );
+    static_assert( nBytesAlignment == nElementsAlignment * 4u * sizeof( T_UCoordinateCuda ),
                    "Element type of polymer systems seems to be larger than the Bytes we need to align on!" );
 
     /* for each monomer the attribute 1 (A) or 2 (B) is stored

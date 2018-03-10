@@ -88,6 +88,10 @@ public:
                                     mIngredients.isPeriodicZ() );
 
         /* copy monomer positions, attributes and connectivity of all monomers */
+        mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] mUpdaterGpu.setLatticeSize\n";
+        mUpdaterGpu.setLatticeSize( mIngredients.getBoxX(),
+                                    mIngredients.getBoxY(),
+                                    mIngredients.getBoxZ() );
         mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] mUpdaterGpu.setNrOfAllMonomers\n";
         mUpdaterGpu.setNrOfAllMonomers( mIngredients.getMolecules().size() );
         mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] mUpdaterGpu.setMonomerCoordinates\n";
@@ -104,13 +108,6 @@ public:
         for ( size_t i = 0u; i < mIngredients.getMolecules().size(); ++i )
         for ( size_t iBond = 0; iBond < mIngredients.getMolecules().getNumLinks(i); ++iBond )
             mUpdaterGpu.setConnectivity( i, mIngredients.getMolecules().getNeighborIdx( i, iBond ) );
-
-        mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] mUpdaterGpu.setLatticeSize\n";
-        mUpdaterGpu.setLatticeSize( mIngredients.getBoxX(),
-                                    mIngredients.getBoxY(),
-                                    mIngredients.getBoxZ() );
-        mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] mUpdaterGpu.populateLattice\n";
-        mUpdaterGpu.populateLattice(); /* needs data set by setMonomerCoordinates. Is this actually needed ??? */
 
          // false-allowed; true-forbidden
         mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] copy bondset from LeMonADE to GPU-class for BFM\n";

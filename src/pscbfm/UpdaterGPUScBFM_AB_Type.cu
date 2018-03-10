@@ -70,12 +70,14 @@ namespace {
 
 
 /* shorten full type names for kernels */
-using T_Flags          = UpdaterGPUScBFM_AB_Type::T_Flags          ;
-using T_Lattice        = UpdaterGPUScBFM_AB_Type::T_Lattice        ;
-using vecIntCUDA       = UpdaterGPUScBFM_AB_Type::T_CoordinatesCuda;
-using T_Coordinate     = UpdaterGPUScBFM_AB_Type::T_Coordinate     ;
-using T_CoordinateCuda = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda ;
-using T_Id             = UpdaterGPUScBFM_AB_Type::T_Id             ;
+using T_Flags           = UpdaterGPUScBFM_AB_Type::T_Flags          ;
+using T_Lattice         = UpdaterGPUScBFM_AB_Type::T_Lattice        ;
+using vecIntCUDA        = UpdaterGPUScBFM_AB_Type::T_CoordinatesCuda;
+using T_Coordinate      = UpdaterGPUScBFM_AB_Type::T_Coordinate     ;
+using T_CoordinateCuda  = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda ;
+using T_UCoordinateCuda = UpdaterGPUScBFM_AB_Type::T_UCoordinateCuda;
+using T_Id              = UpdaterGPUScBFM_AB_Type::T_Id             ;
+using vecUIntCUDA       = CudaVec4< T_UCoordinateCuda >::value_type ;
 
 
 /* 512=8^3 for a range of bonds per direction of [-4,3] */
@@ -1050,7 +1052,7 @@ __device__ inline bool checkFrontBitPacked
 }
 #endif
 
-__device__ __host__ inline uint16_t linearizeBondVectorIndex
+__device__ __host__ inline int16_t linearizeBondVectorIndex
 (
     int16_t const x,
     int16_t const y,
@@ -1805,7 +1807,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
 {
     /* sort groups into new array and save index mappings */
     assert( mPolymerSystemSorted == NULL );
-    mPolymerSystemSorted = new MirroredVector< T_CoordinatesCuda >( mnMonomersPadded, mStream );
+    mPolymerSystemSorted = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
     #ifndef NDEBUG
         std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
     #endif
@@ -2083,8 +2085,9 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( T_Id const rnAllMonomers )
         mLog( "Error" ) << msg.str();
         throw std::runtime_error( msg.str() );
     }
-    mPolymerSystem.resize( mnAllMonomers*4 );
-    mNeighbors    .resize( mnAllMonomers   );
+    mviPolymerSystemVirtualBox.resize( mnAllMonomers*4 );
+    mPolymerSystem            .resize( mnAllMonomers*4 );
+    mNeighbors                .resize( mnAllMonomers   );
     std::memset( &mNeighbors[0], 0, mNeighbors.size() * sizeof( mNeighbors[0] ) );
 }
 
@@ -2137,6 +2140,8 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
 )
 {
 #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 1
+    //if ( ! ( 0 <= x && (T_BoxSize) x < mBoxX ) )
+    //    std::cout << "(" << x << "," << y << "," << z << ")\n";
     /* can I apply periodic modularity here to allow the full range ??? */
     if ( ! inRange< decltype( mPolymerSystem[0] ) >(x) ||
          ! inRange< decltype( mPolymerSystem[0] ) >(y) ||
@@ -2152,14 +2157,18 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
         throw std::invalid_argument( msg.str() );
     }
 #endif
-    mPolymerSystem.at( 4*i+0 ) = x;
-    mPolymerSystem.at( 4*i+1 ) = y;
-    mPolymerSystem.at( 4*i+2 ) = z;
+    mviPolymerSystemVirtualBox.at( 4*i+0 ) = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+    mviPolymerSystemVirtualBox.at( 4*i+1 ) = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+    mviPolymerSystemVirtualBox.at( 4*i+2 ) = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+    mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
+    mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
+    mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
+    std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
 }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mPolymerSystem[ 4*i+0 ]; }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mPolymerSystem[ 4*i+1 ]; }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mPolymerSystem[ 4*i+2 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+0 ) * mBoxX + mPolymerSystem.at( 4*i+0 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+1 ) * mBoxY + mPolymerSystem.at( 4*i+1 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+2 ) * mBoxZ + mPolymerSystem.at( 4*i+2 ); }
 
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
@@ -2485,7 +2494,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             kernelSimulationScBFMCheckSpecies
             <<< nBlocks, nThreads, 0, mStream >>>(
-                mPolymerSystemSorted->gpu,
+                reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu ),
                 mPolymerFlags->gpu,
                 viSubGroupOffsets[ iSpecies ],
                 mLatticeTmp->gpu,
@@ -2500,7 +2509,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelCountFilteredCheck
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu,
+                    reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu ),
                     mPolymerFlags->gpu,
                     viSubGroupOffsets[ iSpecies ],
                     mLatticeTmp->gpu,
@@ -2517,7 +2526,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMPerformSpeciesAndApply
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
@@ -2528,7 +2537,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMPerformSpecies
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
@@ -2540,7 +2549,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelCountFilteredPerform
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
@@ -2566,7 +2575,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             {
                 kernelSimulationScBFMZeroArraySpecies
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ],
+                    reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + viSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeTmp->gpu,
                     mnElementsInGroup[ iSpecies ]
