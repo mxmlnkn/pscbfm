@@ -16,10 +16,10 @@
 
 /**
  * working combinations:
+ *   - nothing set (3.96109s)
  *   - USE_ZCURVE_FOR_LATTICE (2.18166s)
  *   - USE_BIT_PACKING_TMP_LATTICE + USE_ZCURVE_FOR_LATTICE (1.56671s)
  * not working:
- *   - nothing set
  *   - USE_BIT_PACKING_TMP_LATTICE
  *   - USE_MOORE_CURVE_FOR_LATTICE
  * @todo using USE_BIT_PACKING_TMP_LATTICE without USE_ZCURVE_FOR_LATTICE
@@ -576,7 +576,7 @@ __device__ inline bool checkFront
         switch ( axis >> 1 )
         {
             case 0: is[7] =   ( x0 + 2*dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( ( y0 + 2+dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 1: is[7] = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
             case 2: is[7] = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
         }
     #endif
