@@ -2,17 +2,31 @@
  * UpdaterGPUScBFM_AB_Type.cpp
  *
  *  Created on: 27.07.2017
- *      Author: Ron Dockhorn
+ *      Authors: Ron Dockhorn, Maximilian Knespel
  */
 
 #include "UpdaterGPUScBFM_AB_Type.h"
-
 
 //#define USE_THRUST_FILL
 #define USE_BIT_PACKING_TMP_LATTICE
 //#define USE_BIT_PACKING_LATTICE
 //#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
+#define USE_ZCURVE_FOR_LATTICE
+//#define USE_MOORE_CURVE_FOR_LATTICE
 
+/**
+ * working combinations:
+ *   - USE_ZCURVE_FOR_LATTICE (2.18166s)
+ *   - USE_BIT_PACKING_TMP_LATTICE + USE_ZCURVE_FOR_LATTICE (1.56671s)
+ * not working:
+ *   - nothing set
+ *   - USE_BIT_PACKING_TMP_LATTICE
+ *   - USE_MOORE_CURVE_FOR_LATTICE
+ * @todo using USE_BIT_PACKING_TMP_LATTICE without USE_ZCURVE_FOR_LATTICE
+ *       does not work! The error must be in checkFrontBitPacked ... ?
+ * @todo USE_MOORE_CURVE_FOR_LATTICE does not work, neither with nor without
+ *       USE_BIT_PACKING_TMP_LATTICE
+ */
 
 #include <algorithm>                        // fill, sort, count
 #include <chrono>                           // std::chrono::high_resolution_clock
@@ -39,10 +53,30 @@
 #include "SelectiveLogger.hpp"
 #include "graphColoring.tpp"
 
+
 #define DEBUG_UPDATERGPUSCBFM_AB_TYPE 100
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) || defined( USE_BIT_PACKING_LATTICE )
 #   define USE_BIT_PACKING
 #endif
+
+
+
+/**
+ * anonymous namespace containing the kernels and device functions
+ * in order to avoid multiple definition errors as they are only used
+ * in this file and are not to be exported!
+ */
+namespace {
+
+
+/* shorten full type names for kernels */
+using T_Flags          = UpdaterGPUScBFM_AB_Type::T_Flags          ;
+using T_Lattice        = UpdaterGPUScBFM_AB_Type::T_Lattice        ;
+using vecIntCUDA       = UpdaterGPUScBFM_AB_Type::T_CoordinatesCuda;
+using T_Coordinate     = UpdaterGPUScBFM_AB_Type::T_Coordinate     ;
+using T_CoordinateCuda = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda ;
+using T_Id             = UpdaterGPUScBFM_AB_Type::T_Id             ;
+
 
 /* 512=8^3 for a range of bonds per direction of [-4,3] */
 __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbidden
@@ -67,9 +101,9 @@ __device__ __constant__ uint32_t DZTable2_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 
  * in uint32_t anyway and the intCUDA version for solely updating the
  * position information
  */
-__device__ __constant__ intCUDA DXTableIntCUDA_d[6];
-__device__ __constant__ intCUDA DYTableIntCUDA_d[6];
-__device__ __constant__ intCUDA DZTableIntCUDA_d[6];
+__device__ __constant__ T_CoordinateCuda DXTableIntCUDA_d[6];
+__device__ __constant__ T_CoordinateCuda DYTableIntCUDA_d[6];
+__device__ __constant__ T_CoordinateCuda DZTableIntCUDA_d[6];
 
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
@@ -92,7 +126,7 @@ __device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
  * => they only exist for kepler -.- ...
  */
 
-__device__ uint32_t hash( uint32_t a )
+__device__ inline uint32_t hash( uint32_t a )
 {
     /* https://web.archive.org/web/20120626084524/http://www.concentric.net:80/~ttwang/tech/inthash.htm
      * Note that before this 2007-03 version there were no magic numbers.
@@ -194,10 +228,8 @@ __device__ uint32_t part1by2_d( uint32_t n )
 }
 */
 
-namespace {
-
 template< typename T >
-__device__ __host__ bool isPowerOfTwo( T const & x )
+__device__ __host__ inline bool isPowerOfTwo( T const & x )
 {
     //return ! ( x == T(0) ) && ! ( x & ( x - T(1) ) );
     return __popc( x ) <= 1;
@@ -205,18 +237,47 @@ __device__ __host__ bool isPowerOfTwo( T const & x )
 
 }
 
-#define USE_ZCURVE_FOR_LATTICE
-uint32_t UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
+/**
+ * @see https://en.wikipedia.org/wiki/Moore_curve
+ * @see http://www.grant-trebbin.com/2017/03/calculating-hilbert-curve-coordinates.html
+ * @see "Programming the Hilbert curve - John Skilling - 2004"
+ * @see https://testbook.com/blog/conversion-from-gray-code-to-binary-code-and-vice-versa/
+ * @see https://rosettacode.org/wiki/Gray_code#C.2B.2B
+ * @see https://stackoverflow.com/questions/17490431/gray-code-increment-function
+ * @see https://en.wikipedia.org/wiki/Gray_code#Converting_to_and_from_Gray_code
+ */
+template< typename T >
+__device__ __host__ inline T toGrayCode( T x )
+{
+    return x ^ ( x >> 1 );
+}
+
+template< typename T >
+__device__ __host__ inline T fromGrayCode( T x )
+{
+    T p = x;
+    while ( x >>= 1 )
+        p ^= x;
+    return p;
+}
+
+UpdaterGPUScBFM_AB_Type::T_Id UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
 (
-    uint32_t const & ix,
-    uint32_t const & iy,
-    uint32_t const & iz
+    T_Coordinate const & ix,
+    T_Coordinate const & iy,
+    T_Coordinate const & iz
 )
 {
-    #if defined ( USE_ZCURVE_FOR_LATTICE )
-        return   diluteBits< uint32_t, 2 >( ix & mBoxXM1 )        +
-               ( diluteBits< uint32_t, 2 >( iy & mBoxYM1 ) << 1 ) +
-               ( diluteBits< uint32_t, 2 >( iz & mBoxZM1 ) << 2 );
+    #if defined ( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
+        auto const zorder =
+              diluteBits< T_Id, 2 >( T_Id( ix ) & mBoxXM1 )        +
+            ( diluteBits< T_Id, 2 >( T_Id( iy ) & mBoxYM1 ) << 1 ) +
+            ( diluteBits< T_Id, 2 >( T_Id( iz ) & mBoxZM1 ) << 2 );
+        #if defined ( USE_MOORE_CURVE_FOR_LATTICE )
+            return fromGrayCode( zorder );
+        #else
+            return zorder;
+        #endif
     #elif defined( NOMAGIC )
         return ( ix % mBoxX ) +
                ( iy % mBoxY ) * mBoxX +
@@ -227,23 +288,35 @@ uint32_t UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
             assert( isPowerOfTwo( mBoxYM1 + 1 ) );
             assert( isPowerOfTwo( mBoxZM1 + 1 ) );
         #endif
-        return   ( ix & mBoxXM1 ) +
-               ( ( iy & mBoxYM1 ) << mBoxXLog2  ) +
-               ( ( iz & mBoxZM1 ) << mBoxXYLog2 );
+        return   ( T_Id( ix ) & mBoxXM1 ) +
+               ( ( T_Id( iy ) & mBoxYM1 ) << mBoxXLog2  ) +
+               ( ( T_Id( iz ) & mBoxZM1 ) << mBoxXYLog2 );
     #endif
 }
 
-__device__ inline uint32_t linearizeBoxVectorIndex
+/**
+ * same as above, but instead of mBoxXM1 it uses dcBoxXM1,
+ * which resides in constant memory
+ * Input coordinates are implicitly converted to T_Id on call assuming
+ * that T_Id is generally larger than T_Coordinate
+ */
+__device__ inline T_Id linearizeBoxVectorIndex
 (
     uint32_t const & ix,
     uint32_t const & iy,
     uint32_t const & iz
 )
 {
-    #if defined ( USE_ZCURVE_FOR_LATTICE )
-        return   diluteBits< uint32_t, 2 >( ix & dcBoxXM1 )        +
-               ( diluteBits< uint32_t, 2 >( iy & dcBoxYM1 ) << 1 ) +
-               ( diluteBits< uint32_t, 2 >( iz & dcBoxZM1 ) << 2 );
+    #if defined ( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
+        auto const zorder =
+              diluteBits< T_Id, 2 >( ix & dcBoxXM1 )        +
+            ( diluteBits< T_Id, 2 >( iy & dcBoxYM1 ) << 1 ) +
+            ( diluteBits< T_Id, 2 >( iz & dcBoxZM1 ) << 2 );
+        #if defined ( USE_MOORE_CURVE_FOR_LATTICE )
+            return fromGrayCode( zorder );
+        #else
+            return zorder;
+        #endif
     #else
         #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
             assert( isPowerOfTwo( dcBoxXM1 + 1 ) );
@@ -256,10 +329,9 @@ __device__ inline uint32_t linearizeBoxVectorIndex
     #endif
 }
 
-#define USE_BIT_PACKING
 #ifdef USE_BIT_PACKING
-    template< typename T > __device__ __host__ inline
-    T bitPackedGet( T const * const & p, uint32_t const & i )
+    template< typename T, typename T_Id > __device__ __host__ inline
+    T bitPackedGet( T const * const & p, T_Id const & i )
     {
         /**
          * >> 3, because 3 bits = 2^3=8 numbers are used for sub-byte indexing,
@@ -268,13 +340,13 @@ __device__ inline uint32_t linearizeBoxVectorIndex
          * & 7, because 7 = 0b111, i.e. we are only interested in the last 3
          * bits specifying which subbyte element we want
          */
-        return ( p[ i >> 3 ] >> ( i & T(7) ) ) & T(1);
+        return ( p[ i >> 3 ] >> ( i & T_Id(7) ) ) & T(1);
     }
 
-    template< typename T > __device__ inline
-    T bitPackedTextureGet( cudaTextureObject_t const & p, uint32_t const & i )
+    template< typename T, typename T_Id > __device__ inline
+    T bitPackedTextureGet( cudaTextureObject_t const & p, T_Id const & i )
     {
-        return ( tex1Dfetch<T>( p, i >> 3 ) >> ( i & T(7) ) ) & T(1);
+        return ( tex1Dfetch<T>( p, i >> 3 ) >> ( i & T_Id(7) ) ) & T(1);
     }
 
     /**
@@ -286,36 +358,36 @@ __device__ inline uint32_t linearizeBoxVectorIndex
      * __host__ __device__ function with differing code
      * @see https://codeyarns.com/2011/03/14/cuda-common-function-for-both-host-and-device-code/
      */
-    template< typename T > __device__ __host__ inline
-    void bitPackedSet( T * const __restrict__ p, uint32_t const & i )
+    template< typename T, typename T_Id > __device__ __host__ inline
+    void bitPackedSet( T * const __restrict__ p, T_Id const & i )
     {
         static_assert( sizeof(int) == 4, "" );
         #ifdef __CUDA_ARCH__
-            atomicOr ( (int*) p + ( i >> 5 ),    T(1) << ( i & T( 0x1F ) )   );
+            atomicOr ( (int*) p + ( i >> 5 ),    T(1) << ( i & T_Id( 0x1F ) )   );
         #else
-            p[ i >> 3 ] |= T(1) << ( i & T(7) );
+            p[ i >> 3 ] |= T(1) << ( i & T_Id(7) );
         #endif
     }
 
-    template< typename T > __device__ __host__ inline
-    void bitPackedUnset( T * const __restrict__ p, uint32_t const & i )
+    template< typename T, typename T_Id > __device__ __host__ inline
+    void bitPackedUnset( T * const __restrict__ p, T_Id const & i )
     {
         #ifdef __CUDA_ARCH__
-            atomicAnd( (int*) p + ( i >> 5 ), ~( T(1) << ( i & T( 0x1F ) ) ) );
+            atomicAnd( (uint32_t*) p + ( i >> 5 ), ~( uint32_t(1) << ( i & T_Id( 0x1F ) ) ) );
         #else
-            p[ i >> 3 ] &= ~( T(1) << ( i & T(7) ) );
+            p[ i >> 3 ] &= ~( T(1) << ( i & T_Id(7) ) );
         #endif
     }
 #else
-    template< typename T > __device__ __host__ inline
-    T bitPackedGet( T const * const & p, uint32_t const & i ){ return p[i]; }
-    template< typename T > __device__ inline
-    T bitPackedTextureGet( cudaTextureObject_t const & p, uint32_t const & i ) {
+    template< typename T, typename T_Id > __device__ __host__ inline
+    T bitPackedGet( T const * const & p, T_Id const & i ){ return p[i]; }
+    template< typename T, typename T_Id > __device__ inline
+    T bitPackedTextureGet( cudaTextureObject_t const & p, T_Id const & i ) {
         return tex1Dfetch<T>(p,i); }
-    template< typename T > __device__ __host__ inline
-    void bitPackedSet  ( T * const __restrict__ p, uint32_t const & i ){ p[i] = 1; }
-    template< typename T > __device__ __host__ inline
-    void bitPackedUnset( T * const __restrict__ p, uint32_t const & i ){ p[i] = 0; }
+    template< typename T, typename T_Id > __device__ __host__ inline
+    void bitPackedSet  ( T * const __restrict__ p, T_Id const & i ){ p[i] = 1; }
+    template< typename T, typename T_Id > __device__ __host__ inline
+    void bitPackedUnset( T * const __restrict__ p, T_Id const & i ){ p[i] = 0; }
 #endif
 
 
@@ -362,16 +434,19 @@ __device__ inline bool checkFront
     uint32_t            const & x0        ,
     uint32_t            const & y0        ,
     uint32_t            const & z0        ,
-    intCUDA             const & axis      ,
-    uint32_t          * const   iNewFront = NULL
+    uint32_t            const & axis      ,
+    T_Id              * const   iOldPos = NULL
 )
 {
 #if 0
+    if ( iOldPos != NULL )
+        *iOldPos =  linearizeBoxVectorIndex( x0, y0, z0 );
+
     bool isOccupied = false;
     #define TMP_FETCH( x,y,z ) \
-        tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
-    auto const shift  = intCUDA(4) * ( axis & intCUDA(1) ) - intCUDA(2);
-    auto const iMove = axis >> intCUDA(1);
+        tex1Dfetch< T_Lattice >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+    auto const shift  = 4 * ( axis & 1u ) - 2;
+    auto const iMove = axis >> 1;
     /* reduce branching by parameterizing the access axis, but that
      * makes the memory accesses more random again ???
      * for i0=0, i1=1, axis=z (same as in function doxygen ascii art)
@@ -379,10 +454,10 @@ __device__ inline bool checkFront
      *    5 0 1
      *    6 7 8
      */
-    intCUDA r[3] = { x0, y0, z0 };
+    T_CoordinateCuda r[3] = { x0, y0, z0 };
     r[ iMove ] += shift; isOccupied = TMP_FETCH( r[0], r[1], r[2] ); /* 0 */
-    intCUDA i0 = iMove+1 >= 3 ? iMove+1-3 : iMove+1;
-    intCUDA i1 = iMove+2 >= 3 ? iMove+2-3 : iMove+2;
+    auto const i0 = iMove+1 >= 3 ? iMove+1-3 : iMove+1;
+    auto const i1 = iMove+2 >= 3 ? iMove+2-3 : iMove+2;
     r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 1 */
     r[ i1 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 2 */
     r[ i0 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 3 */
@@ -393,12 +468,15 @@ __device__ inline bool checkFront
     r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 8 */
     #undef TMP_FETCH
 #elif 0 // defined( NOMAGIC )
+    if ( iOldPos != NULL )
+        *iOldPos =  linearizeBoxVectorIndex( x0, y0, z0 );
+
     bool isOccupied = false;
-    intCUDA const shift = 4*(axis & 1)-2;
+    auto const shift = 4*(axis & 1)-2;
     switch ( axis >> 1 )
     {
         #define TMP_FETCH( x,y,z ) \
-            tex1Dfetch< uint8_t >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+            tex1Dfetch< T_Lattice >( texLattice, linearizeBoxVectorIndex(x,y,z) )
         case 0: //-+x
         {
             uint32_t const x1 = x0 + shift;
@@ -455,7 +533,7 @@ __device__ inline bool checkFront
         #undef TMP_FETCH
     }
 #else
-    #if defined( USE_ZCURVE_FOR_LATTICE )
+    #if defined( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
         auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
         auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
         auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
@@ -477,29 +555,32 @@ __device__ inline bool checkFront
         auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
     #endif
 
+    if ( iOldPos != NULL )
+        *iOldPos = x0Abs + y0Abs + z0Abs;
+
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
     auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
 
     uint32_t is[9];
 
-    #if defined( USE_ZCURVE_FOR_LATTICE )
-        switch ( axis >> intCUDA(1) )
+    #if defined( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
+        switch ( axis >> 1 )
         {
             case 0: is[7] = ( x0 + 2*dx ) & dcBoxXM1; break;
             case 1: is[7] = ( y0 + 2*dy ) & dcBoxYM1; break;
             case 2: is[7] = ( z0 + 2*dz ) & dcBoxZM1; break;
         }
-        is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> intCUDA(1) );
+        is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
     #else
-        switch ( axis >> intCUDA(1) )
+        switch ( axis >> 1 )
         {
             case 0: is[7] =   ( x0 + 2*dx ) & dcBoxXM1; break;
             case 1: is[7] = ( ( y0 + 2+dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
             case 2: is[7] = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
         }
     #endif
-    switch ( axis >> intCUDA(1) )
+    switch ( axis >> 1 )
     {
         case 0: //-+x
         {
@@ -556,17 +637,28 @@ __device__ inline bool checkFront
             break;
         }
     }
-    if ( iNewFront != NULL )
-        *iNewFront = is[7];
-    bool const isOccupied = tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder0 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder1 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder2 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder3 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder4 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder5 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder6 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder7 ] ) |
-                            tex1Dfetch< uint8_t >( texLattice, is[ iFetchOrder8 ] );
+
+    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
+        is[0] = fromGrayCode( is[0] );
+        is[1] = fromGrayCode( is[1] );
+        is[2] = fromGrayCode( is[2] );
+        is[3] = fromGrayCode( is[3] );
+        is[4] = fromGrayCode( is[4] );
+        is[5] = fromGrayCode( is[5] );
+        is[6] = fromGrayCode( is[6] );
+        is[7] = fromGrayCode( is[7] );
+        is[8] = fromGrayCode( is[8] );
+    #endif
+
+    bool const isOccupied = tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder0 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder1 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder2 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder3 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder4 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder5 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder6 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder7 ] ) |
+                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder8 ] );
 #endif
     return isOccupied;
 }
@@ -579,19 +671,31 @@ __device__ inline bool checkFrontBitPacked
     uint32_t            const & x0        ,
     uint32_t            const & y0        ,
     uint32_t            const & z0        ,
-    intCUDA             const & axis      ,
-    uint32_t          * const   iOldPos = NULL
+    T_Flags             const & axis      ,
+    T_Id              * const   iOldPos = NULL
 )
 {
-    auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
-    auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
-    auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
-    auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
-    auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
-    auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
-    auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
-    auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
-    auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
+    #if defined( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
+        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
+        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
+        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
+        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
+        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
+        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
+        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
+        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
+    #else
+        auto const x0MDX  =   ( x0 - uint32_t(1) ) & dcBoxXM1;
+        auto const x0Abs  =   ( x0               ) & dcBoxXM1;
+        auto const x0PDX  =   ( x0 + uint32_t(1) ) & dcBoxXM1;
+        auto const y0MDY  = ( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0Abs  = ( ( y0               ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const y0PDY  = ( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
+        auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0Abs  = ( ( z0               ) & dcBoxZM1 ) << dcBoxXYLog2;
+        auto const z0PDZ  = ( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
+    #endif
 
     auto const dx = DXTable_d[ axis ];   // 2*axis-1
     auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
@@ -601,22 +705,28 @@ __device__ inline bool checkFrontBitPacked
         *iOldPos = x0Abs + y0Abs + z0Abs;
 
     uint32_t is[9];
-    switch ( axis >> 1 )
-    {
-        case 0: is[7] = ( x0 + dx + dx ) & dcBoxXM1; break;
-        case 1: is[7] = ( y0 + dy + dy ) & dcBoxYM1; break;
-        case 2: is[7] = ( z0 + dz + dz ) & dcBoxZM1; break;
-    }
+
+    #if defined( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
+        switch ( axis >> 1 )
+        {
+            case 0: is[7] = ( x0 + dx + dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( y0 + dy + dy ) & dcBoxYM1; break;
+            case 2: is[7] = ( z0 + dz + dz ) & dcBoxZM1; break;
+        }
+        is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
+    #else
+        switch ( axis >> 1 )
+        {
+            case 0: is[7] =   ( x0 + 2*dx ) & dcBoxXM1; break;
+            case 1: is[7] = ( ( y0 + 2+dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
+            case 2: is[7] = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
+        }
+    #endif
 
 #define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 0
 
-#if ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 5 ) || ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 6 )
-    is[8] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
-#else
-    is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
-#endif
-
 #if CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 6 // same as version 5, but with preemptive return like version 1
+    is[8] = is[7];
     auto const direction = axis >> 1;
     auto const isX = ( axis & 6 ) == 0;
     is[6] = isX ? y0MDY : x0MDX;
@@ -632,10 +742,17 @@ __device__ inline bool checkFrontBitPacked
     is[6] += is[8];
     is[1]  = is[2] + is[7];
 
-    if ( ( bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) ) )
+    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
+        is[0] = fromGrayCode ( is[0] );
+        is[3] = fromGrayCode ( is[3] );
+        is[6] = fromGrayCode ( is[6] );
+        is[1] = fromGrayCode ( is[1] );
+    #endif
+
+    if ( ( bitPackedTextureGet< T_Lattice >( texLattice, is[0] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[3] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[6] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[1] ) ) )
         return true;
 
     is[4]  = is[5] + is[7];
@@ -644,12 +761,21 @@ __device__ inline bool checkFrontBitPacked
     is[5] += b0p1;
     is[8] += b0p1;
 
-    return bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[8] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[7] );
+    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
+        is[2] = fromGrayCode( is[2] );
+        is[5] = fromGrayCode( is[5] );
+        is[8] = fromGrayCode( is[8] );
+        is[4] = fromGrayCode( is[4] );
+        is[7] = fromGrayCode( is[7] );
+    #endif
+
+    return bitPackedTextureGet< T_Lattice >( texLattice, is[2] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[5] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[8] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[4] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[7] );
 #elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 5 // try to reduce registers and times even mroe
+    is[8] = is[7];
     auto const direction = axis >> 1;
     auto const isX = ( axis & 6 ) == 0;
     is[6] = isX ? y0MDY : x0MDX;
@@ -764,9 +890,16 @@ __device__ inline bool checkFrontBitPacked
             is[6]  = is[8] + x0MDX;
             break;
     }
-    if ( ( bitPackedTextureGet< uint8_t >( texLattice, is[0] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[3] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[6] ) ) )
+
+    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
+        is[0] = fromGrayCode( is[0] );
+        is[3] = fromGrayCode( is[3] );
+        is[6] = fromGrayCode( is[6] );
+    #endif
+
+    if ( ( bitPackedTextureGet< T_Lattice >( texLattice, is[0] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[3] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[6] ) ) )
         return true;
 
     switch ( axis >> 1 )
@@ -787,12 +920,22 @@ __device__ inline bool checkFrontBitPacked
             is[7]  = is[8] + x0Abs; is[8] += x0PDX;
             break;
     }
-    return bitPackedTextureGet< uint8_t >( texLattice, is[2] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[5] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[8] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[1] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[4] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[7] );
+
+    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
+        is[1] = fromGrayCode( is[1] );
+        is[2] = fromGrayCode( is[2] );
+        is[4] = fromGrayCode( is[4] );
+        is[5] = fromGrayCode( is[5] );
+        is[7] = fromGrayCode( is[7] );
+        is[8] = fromGrayCode( is[8] );
+    #endif
+
+    return bitPackedTextureGet< T_Lattice >( texLattice, is[2] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[5] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[8] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[1] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[4] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[7] );
 #elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 0
     switch ( axis >> 1 )
     {
@@ -881,24 +1024,37 @@ __device__ inline bool checkFrontBitPacked
      * @endverbatim
      */
 #if ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 1 ) && ( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 6 )
-    return bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder0 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder1 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder2 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder3 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder4 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder5 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder6 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder7 ] ) +
-           bitPackedTextureGet< uint8_t >( texLattice, is[ iFetchOrder8 ] );
+
+    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
+        is[0] = fromGrayCode( is[0] );
+        is[1] = fromGrayCode( is[1] );
+        is[2] = fromGrayCode( is[2] );
+        is[3] = fromGrayCode( is[3] );
+        is[4] = fromGrayCode( is[4] );
+        is[5] = fromGrayCode( is[5] );
+        is[6] = fromGrayCode( is[6] );
+        is[7] = fromGrayCode( is[7] );
+        is[8] = fromGrayCode( is[8] );
+    #endif
+
+    return bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder0 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder1 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder2 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder3 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder4 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder5 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder6 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder7 ] ) +
+           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder8 ] );
 #endif
 }
 #endif
 
-__device__ __host__ inline uintCUDA linearizeBondVectorIndex
+__device__ __host__ inline uint16_t linearizeBondVectorIndex
 (
-    intCUDA const x,
-    intCUDA const y,
-    intCUDA const z
+    int16_t const x,
+    int16_t const y,
+    int16_t const z
 )
 {
     /* Just like for normal integers we clip the range to go more down than up
@@ -909,9 +1065,9 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
     //assert( -4 <= x && x <= 4 );
     //assert( -4 <= y && y <= 4 );
     //assert( -4 <= z && z <= 4 );
-    return   ( x & intCUDA(7) /* 0b111 */ ) +
-           ( ( y & intCUDA(7) /* 0b111 */ ) << intCUDA(3) ) +
-           ( ( z & intCUDA(7) /* 0b111 */ ) << intCUDA(6) );
+    return   ( x & int16_t(7) /* 0b111 */ ) +
+           ( ( y & int16_t(7) /* 0b111 */ ) << 3 ) +
+           ( ( z & int16_t(7) /* 0b111 */ ) << 6 );
 }
 
 /**
@@ -949,17 +1105,16 @@ __device__ __host__ inline uintCUDA linearizeBondVectorIndex
  *       Why are there three kernels instead of just one
  *        -> for global synchronization
  */
-using T_Flags = UpdaterGPUScBFM_AB_Type::T_Flags;
 __global__ void kernelSimulationScBFMCheckSpecies
 (
     vecIntCUDA  const * const __restrict__ dpPolymerSystem         ,
     T_Flags           * const              dpPolymerFlags          ,
     uint32_t            const              iOffset                 ,
-    uint8_t           * const __restrict__ dpLatticeTmp            ,
-    uint32_t    const * const              dpNeighbors             ,
+    T_Lattice         * const __restrict__ dpLatticeTmp            ,
+    T_Id        const * const              dpNeighbors             ,
     uint32_t            const              rNeighborsPitchElements ,
     uint8_t     const * const              dpNeighborsSizes        ,
-    uint32_t            const              nMonomers               ,
+    T_Id                const              nMonomers               ,
     uint32_t            const              rSeed                   ,
     cudaTextureObject_t const              texLatticeRefOut
 )
@@ -975,7 +1130,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
         if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
             rn = hash( hash( iMonomer ) ^ rSeed );
-        T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
+        uint32_t const direction = rn % uint32_t(6); rn /= uint32_t(6);
         T_Flags properties = 0;
 
          /* select random direction. Do this with bitmasking instead of lookup ??? */
@@ -989,9 +1144,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     #ifdef NONPERIODICITY
        /* check whether the new location of the particle would be inside the box
         * if the box is not periodic, if not, then don't move the particle */
-        if ( uint32_t(0) <= r1.x && r1.x < dcBoxXM1 &&
-             uint32_t(0) <= r1.y && r1.y < dcBoxYM1 &&
-             uint32_t(0) <= r1.z && r1.z < dcBoxZM1    )
+        if ( T_CoordinateCuda(0) <= r1.x && r1.x < dcBoxXM1 &&
+             T_CoordinateCuda(0) <= r1.y && r1.y < dcBoxYM1 &&
+             T_CoordinateCuda(0) <= r1.z && r1.z < dcBoxZM1    )
         {
     #endif
             /* check whether the new position would result in invalid bonds
@@ -1008,14 +1163,13 @@ __global__ void kernelSimulationScBFMCheckSpecies
                     break;
                 }
             }
-            uint32_t iNewPos;
-            if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction, &iNewPos ) )
+            if ( ! forbiddenBond && ! checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
             {
                 /* everything fits so perform move on temporary lattice */
                 /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
                  * texture used above. Won't this result in read-after-write race-conditions?
                  * Then again the written / changed bits are never used in the above code ... */
-                properties = ( direction << T_Flags(2) ) + T_Flags(1) /* can-move-flag */;
+                properties = ( direction << 2 ) + T_Flags(1) /* can-move-flag */;
             #ifdef USE_BIT_PACKING_TMP_LATTICE
                 bitPackedSet( dpLatticeTmp, linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) );
             #else
@@ -1035,11 +1189,11 @@ __global__ void kernelCountFilteredCheck
     vecIntCUDA       const * const __restrict__ dpPolymerSystem        ,
     T_Flags          const * const              dpPolymerFlags         ,
     uint32_t                 const              iOffset                ,
-    uint8_t          const * const __restrict__ /* dpLatticeTmp */     ,
-    uint32_t         const * const              dpNeighbors            ,
+    T_Lattice        const * const __restrict__ /* dpLatticeTmp */     ,
+    T_Id             const * const              dpNeighbors            ,
     uint32_t                 const              rNeighborsPitchElements,
     uint8_t          const * const              dpNeighborsSizes       ,
-    uint32_t                 const              nMonomers              ,
+    T_Id                     const              nMonomers              ,
     uint32_t                 const              rSeed                  ,
     cudaTextureObject_t      const              texLatticeRefOut       ,
     unsigned long long int * const              dpFiltered
@@ -1053,16 +1207,16 @@ __global__ void kernelCountFilteredCheck
         auto const r0 = dpPolymerSystem[ iOffset + iMonomer ];
         if ( iGrid % 1 == 0 )
             rn = hash( hash( iMonomer ) ^ rSeed );
-        T_Flags const direction = rn % T_Flags(6); rn /= T_Flags(6);
+        uint32_t const direction = rn % uint32_t(6); rn /= uint32_t(6);
 
         uint3 const r1 = { r0.x + DXTable_d[ direction ],
                            r0.y + DYTable_d[ direction ],
                            r0.z + DZTable_d[ direction ] };
 
     #ifdef NONPERIODICITY
-        if ( uint32_t(0) <= r1.x && r1.x < dcBoxXM1 &&
-             uint32_t(0) <= r1.y && r1.y < dcBoxYM1 &&
-             uint32_t(0) <= r1.z && r1.z < dcBoxZM1    )
+        if ( T_CoordinateCuda(0) <= r1.x && r1.x < dcBoxXM1 &&
+             T_CoordinateCuda(0) <= r1.y && r1.y < dcBoxYM1 &&
+             T_CoordinateCuda(0) <= r1.z && r1.z < dcBoxZM1    )
         {
     #endif
             auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
@@ -1078,7 +1232,7 @@ __global__ void kernelCountFilteredCheck
                     break;
                 }
             }
-            if ( checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction, NULL ) )
+            if ( checkFront( texLatticeRefOut, r0.x, r0.y, r0.z, direction ) )
             {
                 atomicAdd( dpFiltered+2, 1 );
                 if ( ! forbiddenBond ) /* this is the more real relative use-case where invalid bonds are already filtered out */
@@ -1100,8 +1254,8 @@ __global__ void kernelSimulationScBFMPerformSpecies
 (
     vecIntCUDA    const * const              dpPolymerSystem,
     T_Flags             * const              dpPolymerFlags ,
-    uint8_t             * const __restrict__ dpLattice      ,
-    uint32_t              const              nMonomers      ,
+    T_Lattice           * const __restrict__ dpLattice      ,
+    T_Id                  const              nMonomers      ,
     cudaTextureObject_t   const              texLatticeTmp
 )
 {
@@ -1114,17 +1268,18 @@ __global__ void kernelSimulationScBFMPerformSpecies
 
         auto const r0 = dpPolymerSystem[ iMonomer ];
         //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // slower
-        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
+        uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
-        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
     #else
-        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, NULL ) )
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
     #endif
             continue;
 
         /* If possible, perform move now on normal lattice */
         dpPolymerFlags[ iMonomer ] = properties | T_Flags(2); // indicating allowed move
-        dpLattice[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
+        dpLattice[ iOldPos ] = 0;
         dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
                                             r0.y + DYTable_d[ direction ],
                                             r0.z + DZTable_d[ direction ] ) ] = 1;
@@ -1140,8 +1295,8 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 (
     vecIntCUDA          * const              dpPolymerSystem,
     T_Flags             * const              dpPolymerFlags ,
-    uint8_t             * const __restrict__ dpLattice      ,
-    uint32_t              const              nMonomers      ,
+    T_Lattice           * const __restrict__ dpLattice      ,
+    T_Id                  const              nMonomers      ,
     cudaTextureObject_t   const              texLatticeTmp
 )
 {
@@ -1152,23 +1307,24 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
         if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
             continue;
 
-        auto const r0 = ( (CudaVec4< intCUDA >::value_type *) dpPolymerSystem )[ iMonomer ];
-        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+        auto const r0 = dpPolymerSystem[ iMonomer ];
+        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
         uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
         if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
     #else
-        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction ) )
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
     #endif
             continue;
 
         dpLattice[ iOldPos ] = 0;
-        CudaVec4< intCUDA >::value_type const r1 = {
-            intCUDA( r0.x + DXTableIntCUDA_d[ direction ] ),
-            intCUDA( r0.y + DYTableIntCUDA_d[ direction ] ),
-            intCUDA( r0.z + DZTableIntCUDA_d[ direction ] ), 0
+        vecIntCUDA const r1 = {
+            T_CoordinateCuda( r0.x + DXTableIntCUDA_d[ direction ] ),
+            T_CoordinateCuda( r0.y + DYTableIntCUDA_d[ direction ] ),
+            T_CoordinateCuda( r0.z + DZTableIntCUDA_d[ direction ] ),
+            T_CoordinateCuda( 0 )
         };
-        dpLattice[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z )  ] = 1;
+        dpLattice[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
         /* If possible, perform move now on normal lattice */
         dpPolymerSystem[ iMonomer ] = r1;
     }
@@ -1178,8 +1334,8 @@ __global__ void kernelCountFilteredPerform
 (
     vecIntCUDA       const * const              dpPolymerSystem  ,
     T_Flags          const * const              dpPolymerFlags   ,
-    uint8_t          const * const __restrict__ /* dpLattice */  ,
-    uint32_t                 const              nMonomers        ,
+    T_Lattice        const * const __restrict__ /* dpLattice */  ,
+    T_Id                     const              nMonomers        ,
     cudaTextureObject_t      const              texLatticeTmp    ,
     unsigned long long int * const              dpFiltered
 )
@@ -1192,7 +1348,7 @@ __global__ void kernelCountFilteredPerform
             continue;
 
         auto const data = dpPolymerSystem[ iMonomer ];
-        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
         if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction, NULL ) )
             atomicAdd( dpFiltered+4, size_t(1) );
     }
@@ -1217,8 +1373,8 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
 (
     vecIntCUDA          * const              dpPolymerSystem,
     T_Flags       const * const              dpPolymerFlags ,
-    uint8_t             * const __restrict__ dpLatticeTmp   ,
-    uint32_t              const              nMonomers
+    T_Lattice           * const __restrict__ dpLatticeTmp   ,
+    T_Id                  const              nMonomers
 )
 {
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1229,7 +1385,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
             continue;
 
         auto r0 = dpPolymerSystem[ iMonomer ];
-        auto const direction = ( properties >> T_Flags(2) ) & T_Flags(7); // 7=0b111
+        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
 
         r0.x += DXTableIntCUDA_d[ direction ];
         r0.y += DYTableIntCUDA_d[ direction ];
@@ -1371,9 +1527,9 @@ void UpdaterGPUScBFM_AB_Type::initializeBondTable( void )
     CUDA_ERROR( cudaMemcpyToSymbol( DXTable2_d, tmp_DXTable2, sizeof( tmp_DXTable2 ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DYTable2_d, tmp_DYTable2, sizeof( tmp_DXTable2 ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DZTable2_d, tmp_DZTable2, sizeof( tmp_DXTable2 ) ) );
-    intCUDA tmp_DXTableIntCUDA[6] = { -1,1,  0,0,  0,0 };
-    intCUDA tmp_DYTableIntCUDA[6] = {  0,0, -1,1,  0,0 };
-    intCUDA tmp_DZTableIntCUDA[6] = {  0,0,  0,0, -1,1 };
+    T_CoordinateCuda tmp_DXTableIntCUDA[6] = { -1,1,  0,0,  0,0 };
+    T_CoordinateCuda tmp_DYTableIntCUDA[6] = {  0,0, -1,1,  0,0 };
+    T_CoordinateCuda tmp_DZTableIntCUDA[6] = {  0,0,  0,0, -1,1 };
     CUDA_ERROR( cudaMemcpyToSymbol( DXTableIntCUDA_d, tmp_DXTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DYTableIntCUDA_d, tmp_DYTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
     CUDA_ERROR( cudaMemcpyToSymbol( DZTableIntCUDA_d, tmp_DZTableIntCUDA, sizeof( tmp_DZTableIntCUDA ) ) );
@@ -1383,10 +1539,10 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
 {
    mLog( "Info" ) << "Coloring graph ...\n";
     bool const bUniformColors = true; // setting this to true should yield more performance as the kernels are uniformly utilized
-    mGroupIds = graphColoring< MonomerEdges const *, uint32_t, uint8_t >(
+    mGroupIds = graphColoring< MonomerEdges const *, T_Id, T_Color >(
         &mNeighbors[0], mNeighbors.size(), bUniformColors,
-        []( MonomerEdges const * const & x, uint32_t const & i ){ return x[i].size; },
-        []( MonomerEdges const * const & x, uint32_t const & i, size_t const & j ){ return x[i].neighborIds[j]; }
+        []( MonomerEdges const * const & x, T_Id const & i ){ return x[i].size; },
+        []( MonomerEdges const * const & x, T_Id const & i, size_t const & j ){ return x[i].neighborIds[j]; }
     );
 
     /* check automatic coloring with that given in BFM-file */
@@ -1396,7 +1552,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
         size_t nDifferent = 0;
         for ( size_t iMonomer = 0u; iMonomer < std::max< size_t >( 20, mnAllMonomers ); ++iMonomer )
         {
-            if ( mGroupIds.at( iMonomer )+1 != mAttributeSystem[ iMonomer ] )
+            if ( int32_t( mGroupIds.at( iMonomer )+1 ) != mAttributeSystem[ iMonomer ] )
             {
                  mLog( "Info" ) << "Color of " << iMonomer << " is automatically " << mGroupIds.at( iMonomer )+1 << " vs. " << mAttributeSystem[ iMonomer ] << "\n";
                 ++nDifferent;
@@ -1497,11 +1653,11 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
 void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
 {
     /* sort monomers spatially to increase texture cache hit rates for the lattice lookup even more ... ... */
-    std::vector< uint32_t > miNewToiSpatial( mnMonomersPadded ); /* mapping new (monomers spatially sorted) index to old (species sorted) index */
+    std::vector< T_Id > miNewToiSpatial( mnMonomersPadded ); /* mapping new (monomers spatially sorted) index to old (species sorted) index */
     for ( size_t iNew = 0u; iNew < miNewToiSpatial.size(); ++iNew )
         miNewToiSpatial.at( iNew ) = iNew;
 
-    std::vector< uint32_t > vKeysZOrderLinearIds( mnMonomersPadded, UINT32_MAX );
+    std::vector< T_Id > vKeysZOrderLinearIds( mnMonomersPadded, UINT32_MAX );
     for ( size_t iOld = 0u; iOld < mnAllMonomers; ++iOld )
     {
         vKeysZOrderLinearIds.at( miToiNew.at( iOld ) ) = linearizeBoxVectorIndex(
@@ -1544,7 +1700,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
     assert( mNeighborsSortedInfo.getRequiredBytes() == 0 );
     for ( size_t i = 0u; i < mnElementsInGroup.size(); ++i )
         mNeighborsSortedInfo.newMatrix( MAX_CONNECTIVITY, mnElementsInGroup[i] );
-    mNeighborsSorted = new MirroredVector< uint32_t >( mNeighborsSortedInfo.getRequiredElements(), mStream );
+    mNeighborsSorted = new MirroredVector< T_Id >( mNeighborsSortedInfo.getRequiredElements(), mStream );
     std::memset( mNeighborsSorted->host, 0, mNeighborsSorted->nBytes );
     mNeighborsSortedSizes = new MirroredVector< uint8_t >( mnMonomersPadded, mStream );
     std::memset( mNeighborsSortedSizes->host, 0, mNeighborsSortedSizes->nBytes );
@@ -1629,7 +1785,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
         }*/
         /* does a similar check for the unsorted error which is still used
          * to create the property tag */
-        for ( uint32_t i = 0; i < mnAllMonomers; ++i )
+        for ( T_Id i = 0; i < mnAllMonomers; ++i )
         {
             if ( mNeighbors[i].size > MAX_CONNECTIVITY )
             {
@@ -1649,7 +1805,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
 {
     /* sort groups into new array and save index mappings */
     assert( mPolymerSystemSorted == NULL );
-    mPolymerSystemSorted = new MirroredVector< vecIntCUDA >( mnMonomersPadded, mStream );
+    mPolymerSystemSorted = new MirroredVector< T_CoordinatesCuda >( mnMonomersPadded, mStream );
     #ifndef NDEBUG
         std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
     #endif
@@ -1680,12 +1836,12 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
         throw std::runtime_error( msg.str() );
     }
 
-    mLatticeOut = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
-    mLatticeTmp = new MirroredTexture< uint8_t >( mBoxX * mBoxY * mBoxZ, mStream );
+    mLatticeOut = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
+    mLatticeTmp = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
     CUDA_ERROR( cudaMemsetAsync( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream ) );
     /* populate latticeOut with monomers from mPolymerSystem */
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
-    for ( uint32_t iMonomer = 0; iMonomer < mnAllMonomers; ++iMonomer )
+    for ( T_Id iMonomer = 0; iMonomer < mnAllMonomers; ++iMonomer )
     {
         mLatticeOut->host[ linearizeBoxVectorIndex( mPolymerSystem[ 4 * iMonomer + 0 ],
                                                     mPolymerSystem[ 4 * iMonomer + 1 ],
@@ -1886,11 +2042,11 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     checkSystem();
     initializeLattices();
 
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &mBoxXM1   , sizeof( mBoxXM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &mBoxYM1   , sizeof( mBoxYM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &mBoxZM1   , sizeof( mBoxZM1    ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &mBoxXLog2 , sizeof( mBoxXLog2  ) ) );
-    CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &mBoxXYLog2, sizeof( mBoxXYLog2 ) ) );
+    { decltype( dcBoxXM1    ) x = mBoxXM1   ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &x, sizeof(x) ) ); }
+    { decltype( dcBoxYM1    ) x = mBoxYM1   ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &x, sizeof(x) ) ); }
+    { decltype( dcBoxZM1    ) x = mBoxZM1   ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &x, sizeof(x) ) ); }
+    { decltype( dcBoxXLog2  ) x = mBoxXLog2 ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &x, sizeof(x) ) ); }
+    { decltype( dcBoxXYLog2 ) x = mBoxXYLog2; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &x, sizeof(x) ) ); }
 
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
     CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
@@ -1903,7 +2059,7 @@ void UpdaterGPUScBFM_AB_Type::copyBondSet
     mForbiddenBonds[ linearizeBondVectorIndex(dx,dy,dz) ] = bondForbidden;
 }
 
-void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( uint32_t const rnAllMonomers )
+void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( T_Id const rnAllMonomers )
 {
     if ( mnAllMonomers != 0 || mAttributeSystem != NULL ||
          mPolymerSystemSorted != NULL || mNeighborsSorted != NULL )
@@ -1959,7 +2115,7 @@ void UpdaterGPUScBFM_AB_Type::setPeriodicity
     }
 }
 
-void UpdaterGPUScBFM_AB_Type::setAttribute( uint32_t i, int32_t attribute )
+void UpdaterGPUScBFM_AB_Type::setAttribute( T_Id i, int32_t attribute )
 {
     #if ! defined( NDEBUG ) && false
         std::cerr << "[setAttribute] mAttributeSystem = " << (void*) mAttributeSystem << "\n";
@@ -1974,10 +2130,10 @@ void UpdaterGPUScBFM_AB_Type::setAttribute( uint32_t i, int32_t attribute )
 
 void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
 (
-    uint32_t const i,
-    int32_t  const x,
-    int32_t  const y,
-    int32_t  const z
+    T_Id          const i,
+    T_Coordinate  const x,
+    T_Coordinate  const y,
+    T_Coordinate  const z
 )
 {
 #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 1
@@ -1991,8 +2147,8 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
             << "One or more of the given coordinates "
             << "(" << x << "," << y << "," << z << ") "
             << "is larger than the internal integer data type for "
-            << "representing positions allow! (" << std::numeric_limits< intCUDA >::min()
-            << " <= size <= " << std::numeric_limits< intCUDA >::max() << ")";
+            << "representing positions allow! (" << std::numeric_limits< T_Coordinate >::min()
+            << " <= size <= " << std::numeric_limits< T_Coordinate >::max() << ")";
         throw std::invalid_argument( msg.str() );
     }
 #endif
@@ -2001,14 +2157,14 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     mPolymerSystem.at( 4*i+2 ) = z;
 }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( uint32_t i ){ return mPolymerSystem[ 4*i+0 ]; }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( uint32_t i ){ return mPolymerSystem[ 4*i+1 ]; }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( uint32_t i ){ return mPolymerSystem[ 4*i+2 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mPolymerSystem[ 4*i+0 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mPolymerSystem[ 4*i+1 ]; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mPolymerSystem[ 4*i+2 ]; }
 
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
-    uint32_t const iMonomer1,
-    uint32_t const iMonomer2
+    T_Id const iMonomer1,
+    T_Id const iMonomer2
 )
 {
     /* @todo add check whether the bond already exists */
@@ -2027,24 +2183,24 @@ void UpdaterGPUScBFM_AB_Type::setConnectivity
 
 void UpdaterGPUScBFM_AB_Type::setLatticeSize
 (
-    uint32_t const boxX,
-    uint32_t const boxY,
-    uint32_t const boxZ
+    T_BoxSize const boxX,
+    T_BoxSize const boxY,
+    T_BoxSize const boxZ
 )
 {
     if ( mBoxX == boxX && mBoxY == boxY && mBoxZ == boxZ )
         return;
 
-    if ( ! ( inRange< intCUDA >( boxX ) &&
-             inRange< intCUDA >( boxY ) &&
-             inRange< intCUDA >( boxZ )    ) )
+    if ( ! ( inRange< T_Coordinate >( boxX ) &&
+             inRange< T_Coordinate >( boxY ) &&
+             inRange< T_Coordinate >( boxZ )    ) )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::setLatticeSize" << "] "
             << "The box size (" << boxX << "," << boxY << "," << boxZ
             << ") is larger than the internal integer data type for "
-            << "representing positions allow! (" << std::numeric_limits< intCUDA >::min()
-            << " <= size <= " << std::numeric_limits< intCUDA >::max() << ")";
+            << "representing positions allow! (" << std::numeric_limits< T_Coordinate >::min()
+            << " <= size <= " << std::numeric_limits< T_Coordinate >::max() << ")";
         throw std::invalid_argument( msg.str() );
     }
 
@@ -2058,7 +2214,7 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
     /* determine log2 for mBoxX and mBoxX * mBoxY to be used for bitshifting
      * the indice instead of multiplying ... WHY??? I don't think it is faster,
      * but much less readable */
-    mBoxXLog2  = 0; uint32_t dummy = mBoxX; while ( dummy >>= 1 ) ++mBoxXLog2;
+    mBoxXLog2  = 0; auto dummy = mBoxX; while ( dummy >>= 1 ) ++mBoxXLog2;
     mBoxXYLog2 = 0; dummy = mBoxX*mBoxY;    while ( dummy >>= 1 ) ++mBoxXYLog2;
     if ( mBoxX != ( 1u << mBoxXLog2 ) || mBoxX * boxY != ( 1u << mBoxXYLog2 ) )
     {
@@ -2074,7 +2230,7 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
 
     if ( mLattice != NULL )
         delete[] mLattice;
-    mLattice = new uint8_t[ mBoxX * mBoxY * mBoxZ ];
+    mLattice = new T_Lattice[ mBoxX * mBoxY * mBoxZ ];
     std::memset( (void *) mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
 }
 
@@ -2136,7 +2292,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     /*
      Lattice is an array of size Box_X*Box_Y*Box_Z. PolymerSystem holds the monomer positions which I strongly guess are supposed to be in the range 0<=x<Box_X. If I see correctly, then this part checks for excluded volume by occupying a 2x2x2 cube for each monomer in Lattice and then counting the total occupied cells and compare it to the theoretical value of nMonomers * 8. But Lattice seems to be too small for that kinda usage! I.e. for two particles, one being at x=0 and the other being at x=Box_X-1 this test should return that the excluded volume condition is not met! Therefore the effective box size is actually (Box_X-1,Box_X-1,Box_Z-1) which in my opinion should be a bug ??? */
     std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
-    for ( uint32_t i = 0; i < mnAllMonomers; ++i )
+    for ( T_Id i = 0; i < mnAllMonomers; ++i )
     {
         int32_t const & x = mPolymerSystem[ 4*i   ];
         int32_t const & y = mPolymerSystem[ 4*i+1 ];
@@ -2187,10 +2343,10 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        intCUDA * const neighbor = & mPolymerSystem[ 4*mNeighbors[i].neighborIds[ iNeighbor ] ];
-        int32_t const dx = neighbor[0] - mPolymerSystem[ 4*i+0 ];
-        int32_t const dy = neighbor[1] - mPolymerSystem[ 4*i+1 ];
-        int32_t const dz = neighbor[2] - mPolymerSystem[ 4*i+2 ];
+        T_Coordinate * const neighbor = & mPolymerSystem[ 4*mNeighbors[i].neighborIds[ iNeighbor ] ];
+        auto const dx = neighbor[0] - mPolymerSystem[ 4*i+0 ];
+        auto const dy = neighbor[1] - mPolymerSystem[ 4*i+1 ];
+        auto const dz = neighbor[2] - mPolymerSystem[ 4*i+2 ];
 
         int erroneousAxis = -1;
         if ( ! ( -3 <= dx && dx <= 3 ) ) erroneousAxis = 0;
@@ -2218,7 +2374,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
 
 void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 (
-    int32_t const nMonteCarloSteps
+    uint32_t const nMonteCarloSteps
 )
 {
     std::clock_t const t0 = std::clock();
@@ -2303,7 +2459,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     /* run simulation */
-    for ( int32_t iStep = 1; iStep <= nMonteCarloSteps; ++iStep )
+    for ( uint32_t iStep = 1u; iStep <= nMonteCarloSteps; ++iStep )
     {
         /* one Monte-Carlo step:
          *  - tries to move on average all particles one time

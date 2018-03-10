@@ -2,7 +2,7 @@
  * UpdaterGPUScBFM_AB_Type.h
  *
  *  Created on: 27.07.2017
- *      Author: Ron Dockhorn
+ *      Authors: Ron Dockhorn, Maximilian Knespel
  */
 
 #pragma once
@@ -22,21 +22,16 @@
 
 
 
-/* This is still used, at least the 32 bit version! */
-#if 0
-    typedef uint32_t uintCUDA;
-    typedef int32_t  intCUDA;
-    #define MASK5BITS 0x7FFFFFE0
-#else
-    typedef uint16_t uintCUDA;
-    typedef int16_t  intCUDA;
-    #define MASK5BITS 0x7FE0
-#endif
-using vecIntCUDA = CudaVec4< intCUDA >::value_type;
-
-
-#define MAX_CONNECTIVITY 4 // original connectivity
-// #define MAX_CONNECTIVITY 8 // needed for the coloring example
+/**
+ * When not reordering the neighbor information as struct of array,
+ * then increasing this leads to performance degradataion!
+ * But currently, as the reordering is implemented, it just leads to
+ * higher memory usage.
+ * In the 3D case more than 20 makes no sense for the standard bond vector
+ * set, as the volume exclusion plus the bond vector set make 20 neighbors
+ * the maximum. In real use cases 8 are already very much / more than sufficient.
+ */
+#define MAX_CONNECTIVITY 8
 
 //#define NONPERIODICITY
 
@@ -123,6 +118,38 @@ struct AlignedMatrices
 
 class UpdaterGPUScBFM_AB_Type
 {
+public:
+    /**
+     * This is still used, at least the 32 bit version!
+     * These are the types for the monomer positions.
+     * Even for the periodic case, we are sometimes interested in the "global"
+     * position without fold back to the periodic box in order to calculate
+     * diffusion easily.
+     * Although you also could derive an algorithm for automatically finding
+     * larger jumps and undo the folding back manually. In order to not miss
+     * a case you would have to do this every
+     *     dtApplyJumps = ceilDiv( min( boxX, boxY, boxZ ), 2 ) - 1
+     * time steps. If a particle moved dtApplyJumps+1, then you could be sure
+     * that it was indeed because of the periodicity condition.
+     * But then again, using uint8_t would limit the box size to 256 which we
+     * do not want. The bit operation introduced limitation to 1024 is already
+     * a little bit worrisome.
+     * But IF you have such a small box and you can use uint8_t, then we could
+     * do as written above and possibly make the algorithm EVEN FASTER as the
+     * memory bandwidth could be reduced even more!
+     */
+    using T_BoxSize         = uint64_t; // uint32_t // should be unsigned!
+    using T_Coordinate      = int32_t; // int64_t // should be signed!
+    using T_CoordinateCuda  = int16_t; // int32_t (int8_t, uint8_t does not work for a 256^3 box :S ??? )
+    using T_CoordinatesCuda = CudaVec4< T_CoordinateCuda >::value_type;
+    /* could also be uint8_t if you know you only have 256 different
+     * species at maximum. For the autocoloring this is implicitly true,
+     * but not so if the user manually specifies colors! */
+    using T_Color   = uint32_t;
+    using T_Flags   = uint8_t ; // uint16_t, uint32_t
+    using T_Id      = uint32_t; // should be unsigned!
+    using T_Lattice = uint8_t ; // untested for something else than uint8_t!
+
 private:
     SelectedLogger mLog;
 
@@ -139,8 +166,8 @@ private:
      * Suggestion: bitpack it to save 8 times memory and possibly make the
      *             the reading faster if it is memory bound ???
      */
-    uint8_t * mLattice; // being used for checkLattice nothing else ...
-    MirroredTexture< uint8_t > * mLatticeOut, * mLatticeTmp;
+    T_Lattice * mLattice; // being used for checkLattice nothing else ...
+    MirroredTexture< T_Lattice > * mLatticeOut, * mLatticeTmp;
 
     /* copy into mPolymerSystem and drop the property tag while doing so.
      * would be easier and probably more efficient if mPolymerSystem_device/host
@@ -167,7 +194,7 @@ private:
      * populating the lattice with 2x2x2 boxes representing the monomers
      */
     size_t mnAllMonomers;
-    std::vector< intCUDA > mPolymerSystem;
+    std::vector< T_Coordinate > mPolymerSystem;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array
      * in order to split neighbors size off into extra array, thereby also
@@ -179,7 +206,7 @@ private:
      * I think I need AlignedMatrices for this, too :(
      */
     size_t mnMonomersPadded;
-    MirroredVector< vecIntCUDA > * mPolymerSystemSorted;
+    MirroredVector< T_CoordinatesCuda > * mPolymerSystemSorted;
     /**
      * These are to be used for storing the flags and chosen direction of
      * the old property tag.
@@ -191,14 +218,12 @@ private:
      * the GPU, so MirroredVector isn't necessary, but it's easy to use and
      * could be nice for debugging (e.g. to replace the count kernels)
      */
-public:
-    using T_Flags = uint8_t; // uint16_t, uint32_t
-private:
     MirroredVector< T_Flags > * mPolymerFlags;
 
     static auto constexpr nBytesAlignment    = 512u;
-    static auto constexpr nElementsAlignment = nBytesAlignment / ( 4u * sizeof( intCUDA ) );
-    static_assert( nBytesAlignment == nElementsAlignment * 4u * sizeof( intCUDA), "Element type of polymer systems seems to be larger than the Bytes we need to align on!" );
+    static auto constexpr nElementsAlignment = nBytesAlignment / ( 4u * sizeof( T_CoordinateCuda ) );
+    static_assert( nBytesAlignment == nElementsAlignment * 4u * sizeof( T_CoordinateCuda ),
+                   "Element type of polymer systems seems to be larger than the Bytes we need to align on!" );
 
     /* for each monomer the attribute 1 (A) or 2 (B) is stored
      * -> could be 1 bit per monomer ... !!!
@@ -206,7 +231,7 @@ private:
      * -> wow std::vector<bool> already optimized for space with bit masking!
      * This is only needed once for initializing mMonomerIdsA,B */
     int32_t * mAttributeSystem;
-    std::vector< uint8_t > mGroupIds; /* for each monomer stores the color / attribute / group ID/tag */
+    std::vector< T_Color > mGroupIds; /* for each monomer stores the color / attribute / group ID/tag */
     std::vector< size_t > mnElementsInGroup;
     std::vector< size_t > miToiNew;   /* for each old monomer stores the new position */
     std::vector< size_t > miNewToi;   /* for each new monomer stores the old position */
@@ -223,13 +248,13 @@ public:
     /* stores amount and IDs of neighbors for each monomer */
     struct MonomerEdges
     {
-        uint32_t size;
-        uint32_t neighborIds[ MAX_CONNECTIVITY ];
+        T_Id size; // could also be uint8_t as it is limited by MAX_CONNECTIVITY
+        T_Id neighborIds[ MAX_CONNECTIVITY ];
     };
     /* size is encoded in mPolymerSystem to make things faster */
     struct MonomerEdgesCompressed
     {
-        uint32_t neighborIds[ MAX_CONNECTIVITY ];
+        T_Id neighborIds[ MAX_CONNECTIVITY ];
     };
 private:
     std::vector< MonomerEdges > mNeighbors;
@@ -278,18 +303,18 @@ private:
      * Therefore the access to the j-th neighbor of monomer i of species s
      * would be ... too complicated, I need a new class for this problem.
      */
-    MirroredVector < uint32_t > * mNeighborsSorted;
-    MirroredVector < uint8_t  > * mNeighborsSortedSizes;
-    AlignedMatrices< uint32_t >   mNeighborsSortedInfo;
+    MirroredVector < T_Id    > * mNeighborsSorted;
+    MirroredVector < uint8_t > * mNeighborsSortedSizes;
+    AlignedMatrices< T_Id    >   mNeighborsSortedInfo;
 
-    uint32_t   mBoxX     ;
-    uint32_t   mBoxY     ;
-    uint32_t   mBoxZ     ;
-    uint32_t   mBoxXM1   ;
-    uint32_t   mBoxYM1   ;
-    uint32_t   mBoxZM1   ;
-    uint32_t   mBoxXLog2 ;
-    uint32_t   mBoxXYLog2;
+    T_BoxSize mBoxX     ;
+    T_BoxSize mBoxY     ;
+    T_BoxSize mBoxZ     ;
+    T_BoxSize mBoxXM1   ;
+    T_BoxSize mBoxYM1   ;
+    T_BoxSize mBoxZM1   ;
+    T_BoxSize mBoxXLog2 ;
+    T_BoxSize mBoxXYLog2;
 
     int            miGpuToUse;
     cudaDeviceProp mCudaProps;
@@ -300,11 +325,11 @@ private:
      * should have a range of 2^30, meaning uint32_t as output is pretty
      * fixed with uint16_t being way too few bits
      */
-    uint32_t linearizeBoxVectorIndex
+    T_Id linearizeBoxVectorIndex
     (
-        uint32_t const & ix,
-        uint32_t const & iy,
-        uint32_t const & iz
+        T_Coordinate const & ix,
+        T_Coordinate const & iy,
+        T_Coordinate const & iz
     );
 
     /**
@@ -349,21 +374,22 @@ public:
     /* setter methods */
     void setGpu               ( int iGpuToUse );
     void copyBondSet( int dx, int dy, int dz, bool bondForbidden );
-    void setNrOfAllMonomers   ( uint32_t nAllMonomers );
-    void setAttribute         ( uint32_t i, int32_t attribute );
-    void setMonomerCoordinates( uint32_t i, int32_t x, int32_t y, int32_t z );
-    void setConnectivity      ( uint32_t monoidx1, uint32_t monoidx2 );
-    void setLatticeSize       ( uint32_t boxX, uint32_t boxY, uint32_t boxZ );
+    void setNrOfAllMonomers   ( T_Id nAllMonomers );
+    void setAttribute         ( T_Id i, int32_t attribute ); // this is to be NOT the coloring as needed for parallelizing the BFM, it is to be used for additional e.g. physical attributes like actual chemical types
+    void setMonomerCoordinates( T_Id i, T_Coordinate x, T_Coordinate y, T_Coordinate z );
+    void setConnectivity      ( T_Id monoidx1, T_Id monoidx2 );
+    void setLatticeSize       ( T_BoxSize boxX, T_BoxSize boxY, T_BoxSize boxZ );
 
     /**
      * sets monomer positions given in mPolymerSystem in mLattice to occupied
      */
     void populateLattice();
-    void runSimulationOnGPU( int32_t nrMCS_per_Call );
+    void runSimulationOnGPU( uint32_t nrMCS_per_Call );
 
-    int32_t getMonomerPositionInX( uint32_t i );
-    int32_t getMonomerPositionInY( uint32_t i );
-    int32_t getMonomerPositionInZ( uint32_t i );
+    /* using T_Coordinate with int64_t throws error as LeMonADE itself is limited to 32 bit positions! */
+    int32_t getMonomerPositionInX( T_Id i );
+    int32_t getMonomerPositionInY( T_Id i );
+    int32_t getMonomerPositionInZ( T_Id i );
 
     void setPeriodicity( bool isPeriodicX, bool isPeriodicY, bool isPeriodicZ );
 
