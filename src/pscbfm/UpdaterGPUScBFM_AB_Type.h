@@ -141,10 +141,10 @@ public:
      */
     using T_BoxSize          = uint64_t; // uint32_t // should be unsigned!
     using T_Coordinate       = int32_t; // int64_t // should be signed!
-    using T_CoordinateCuda   = int16_t; // int32_t (int8_t, uint8_t does not work for a 256^3 box :S ??? )
+    using T_CoordinateCuda   = int8_t; // int32_t (int8_t, uint8_t does not work for a 256^3 box :S ??? )
     using T_UCoordinateCuda  = std::make_unsigned< T_CoordinateCuda >::type;
     using T_CoordinatesCuda  = CudaVec4< T_CoordinateCuda >::value_type;
-    using T_UCoordinatesCuda = CudaVec4< T_CoordinateCuda >::value_type;
+    using T_UCoordinatesCuda = CudaVec4< T_UCoordinateCuda >::value_type;
     /* could also be uint8_t if you know you only have 256 different
      * species at maximum. For the autocoloring this is implicitly true,
      * but not so if the user manually specifies colors! */
@@ -198,6 +198,7 @@ private:
      */
     size_t mnAllMonomers;
     std::vector< T_Coordinate > mPolymerSystem;
+    std::vector< T_Coordinate > mPolymerSystemOld;
     std::vector< T_Coordinate > mviPolymerSystemVirtualBox;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array
@@ -334,12 +335,12 @@ private:
         T_Coordinate const & ix,
         T_Coordinate const & iy,
         T_Coordinate const & iz
-    );
+    ) const;
 
     /**
      * Checks for excluded volume condition and for correctness of all monomer bonds
      */
-    void checkSystem();
+    void checkSystem() const;
 
 public:
     UpdaterGPUScBFM_AB_Type();

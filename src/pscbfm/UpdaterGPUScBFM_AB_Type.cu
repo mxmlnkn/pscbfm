@@ -35,6 +35,7 @@
 #include <cstring>                          // memset
 #include <ctime>
 #include <iostream>
+#include <limits>                           // numeric_limits
 #include <stdexcept>
 #include <stdint.h>
 #include <sstream>
@@ -268,7 +269,7 @@ UpdaterGPUScBFM_AB_Type::T_Id UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
     T_Coordinate const & ix,
     T_Coordinate const & iy,
     T_Coordinate const & iz
-)
+) const
 {
     #if defined ( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
         auto const zorder =
@@ -1822,6 +1823,8 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         pTarget->y = mPolymerSystem[ 4*i+1 ];
         pTarget->z = mPolymerSystem[ 4*i+2 ];
         pTarget->w = mNeighbors[i].size;
+        if ( pTarget->x != mPolymerSystem[ 4*i+0 ] )
+            std::cout << "!!! x=" << pTarget->x << " != " << mPolymerSystem[ 4*i+0 ] << "\n";
     }
     mPolymerSystemSorted->pushAsync();
 }
@@ -2141,7 +2144,7 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
 {
 #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 1
     //if ( ! ( 0 <= x && (T_BoxSize) x < mBoxX ) )
-    //    std::cout << "(" << x << "," << y << "," << z << ")\n";
+    //    std::cout << i << ": (" << x << "," << y << "," << z << ")\n";
     /* can I apply periodic modularity here to allow the full range ??? */
     if ( ! inRange< decltype( mPolymerSystem[0] ) >(x) ||
          ! inRange< decltype( mPolymerSystem[0] ) >(y) ||
@@ -2163,7 +2166,7 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
     mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
     mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
-    std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
+    //std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
 }
 
 int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+0 ) * mBoxX + mPolymerSystem.at( 4*i+0 ); }
@@ -2275,20 +2278,14 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
  * "In my tests, for sizes ranging from 8 MB to 32 MB, the cost for a new[]/delete[] pair averaged about 7.5 μs (microseconds), split into ~5.0 μs for the allocation and ~2.5 μs for the free."
  *  => ~40k cycles
  */
-void UpdaterGPUScBFM_AB_Type::checkSystem()
+void UpdaterGPUScBFM_AB_Type::checkSystem() const
 {
     if ( ! mLog.isActive( "Check" ) )
         return;
 
-    if ( mLattice == NULL )
-    {
-        std::stringstream msg;
-        msg << "[" << __FILENAME__ << "::checkSystem" << "] "
-            << "mLattice is not allocated. You need to call "
-            << "setNrOfAllMonomers and initialize before calling checkSystem!\n";
-        mLog( "Error" ) << msg.str();
-        throw std::invalid_argument( msg.str() );
-    }
+    /* note that std::vector< bool > already uses bitpacking!
+     * We'd have to watch out when erasing that array with memset! */
+    std::vector< uint8_t > lattice( mBoxX * mBoxY * mBoxZ, 0 );
 
     /**
      * Test for excluded volume by setting all lattice points and count the
@@ -2300,7 +2297,6 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
      */
     /*
      Lattice is an array of size Box_X*Box_Y*Box_Z. PolymerSystem holds the monomer positions which I strongly guess are supposed to be in the range 0<=x<Box_X. If I see correctly, then this part checks for excluded volume by occupying a 2x2x2 cube for each monomer in Lattice and then counting the total occupied cells and compare it to the theoretical value of nMonomers * 8. But Lattice seems to be too small for that kinda usage! I.e. for two particles, one being at x=0 and the other being at x=Box_X-1 this test should return that the excluded volume condition is not met! Therefore the effective box size is actually (Box_X-1,Box_X-1,Box_Z-1) which in my opinion should be a bug ??? */
-    std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
     for ( T_Id i = 0; i < mnAllMonomers; ++i )
     {
         int32_t const & x = mPolymerSystem[ 4*i   ];
@@ -2317,14 +2313,14 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
          *    +---+---+'''
          * @endverbatim
          */
-        mLattice[ linearizeBoxVectorIndex( x  , y  , z   ) ] = 1; /* 0 */
-        mLattice[ linearizeBoxVectorIndex( x+1, y  , z   ) ] = 1; /* 1 */
-        mLattice[ linearizeBoxVectorIndex( x  , y+1, z   ) ] = 1; /* 2 */
-        mLattice[ linearizeBoxVectorIndex( x+1, y+1, z   ) ] = 1; /* 3 */
-        mLattice[ linearizeBoxVectorIndex( x  , y  , z+1 ) ] = 1; /* 4 */
-        mLattice[ linearizeBoxVectorIndex( x+1, y  , z+1 ) ] = 1; /* 5 */
-        mLattice[ linearizeBoxVectorIndex( x  , y+1, z+1 ) ] = 1; /* 6 */
-        mLattice[ linearizeBoxVectorIndex( x+1, y+1, z+1 ) ] = 1; /* 7 */
+        lattice[ linearizeBoxVectorIndex( x  , y  , z   ) ] = 1; /* 0 */
+        lattice[ linearizeBoxVectorIndex( x+1, y  , z   ) ] = 1; /* 1 */
+        lattice[ linearizeBoxVectorIndex( x  , y+1, z   ) ] = 1; /* 2 */
+        lattice[ linearizeBoxVectorIndex( x+1, y+1, z   ) ] = 1; /* 3 */
+        lattice[ linearizeBoxVectorIndex( x  , y  , z+1 ) ] = 1; /* 4 */
+        lattice[ linearizeBoxVectorIndex( x+1, y  , z+1 ) ] = 1; /* 5 */
+        lattice[ linearizeBoxVectorIndex( x  , y+1, z+1 ) ] = 1; /* 6 */
+        lattice[ linearizeBoxVectorIndex( x+1, y+1, z+1 ) ] = 1; /* 7 */
     }
     /* check total occupied cells inside lattice to ensure that the above
      * transfer went without problems. Note that the number will be smaller
@@ -2332,8 +2328,8 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
      * Could also simply reduce mLattice with +, I think, because it only
      * cotains 0 or 1 ??? */
     unsigned nOccupied = 0;
-    for ( unsigned i = 0u; i < mBoxX * mBoxY * mBoxZ; ++i )
-        nOccupied += mLattice[i] != 0;
+    for ( uint32_t i = 0u; i < mBoxX * mBoxY * mBoxZ; ++i )
+        nOccupied += lattice[i] != 0;
     if ( ! ( nOccupied == mnAllMonomers * 8 ) )
     {
         std::stringstream msg;
@@ -2347,15 +2343,28 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
      * Check bonds i.e. that |dx|<=3 and whether it is allowed by the given
      * bond set
      */
-    for ( unsigned i = 0; i < mnAllMonomers; ++i )
+    for ( T_Id i = 0; i < mnAllMonomers; ++i )
     for ( unsigned iNeighbor = 0; iNeighbor < mNeighbors[i].size; ++iNeighbor )
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        T_Coordinate * const neighbor = & mPolymerSystem[ 4*mNeighbors[i].neighborIds[ iNeighbor ] ];
-        auto const dx = neighbor[0] - mPolymerSystem[ 4*i+0 ];
-        auto const dy = neighbor[1] - mPolymerSystem[ 4*i+1 ];
-        auto const dz = neighbor[2] - mPolymerSystem[ 4*i+2 ];
+        T_Coordinate const * const neighbor = & mPolymerSystem[ 4*mNeighbors[i].neighborIds[ iNeighbor ] ];
+        auto dx = (int) neighbor[0] - (int) mPolymerSystem[ 4*i+0 ];
+        auto dy = (int) neighbor[1] - (int) mPolymerSystem[ 4*i+1 ];
+        auto dz = (int) neighbor[2] - (int) mPolymerSystem[ 4*i+2 ];
+        /* with this uncommented, we can ignore if a monomer jumps over the
+         * whole box range or T_UCoordinateCuda range */
+        /*
+        #ifndef NDEBUG
+            auto constexpr nLongestBond = 8u;
+            assert( mBoxX >= nLongestBond );
+            assert( mBoxY >= nLongestBond );
+            assert( mBoxZ >= nLongestBond );
+        #endif
+        dx %= mBoxX; if ( dx < -int( mBoxX )/ 2 ) dx += mBoxX; if ( dx > (int) mBoxX / 2 ) dx -= mBoxX;
+        dy %= mBoxY; if ( dy < -int( mBoxY )/ 2 ) dy += mBoxY; if ( dy > (int) mBoxY / 2 ) dy -= mBoxY;
+        dz %= mBoxZ; if ( dz < -int( mBoxZ )/ 2 ) dz += mBoxZ; if ( dz > (int) mBoxZ / 2 ) dz -= mBoxZ;
+        */
 
         int erroneousAxis = -1;
         if ( ! ( -3 <= dx && dx <= 3 ) ) erroneousAxis = 0;
@@ -2366,14 +2375,14 @@ void UpdaterGPUScBFM_AB_Type::checkSystem()
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::checkSystem] ";
             if ( erroneousAxis > 0 )
-                msg << "Invalid " << 'X' + erroneousAxis << "Bond: ";
+                msg << "Invalid " << char( 'X' + erroneousAxis ) << "-Bond: ";
             if ( mForbiddenBonds[ linearizeBondVectorIndex( dx, dy, dz ) ] )
                 msg << "This particular bond is forbidden: ";
             msg << "(" << dx << "," << dy<< "," << dz << ") between monomer "
-                << i+1 << " at (" << mPolymerSystem[ 4*i+0 ] << ","
-                                  << mPolymerSystem[ 4*i+1 ] << ","
-                                  << mPolymerSystem[ 4*i+2 ] << ") and monomer "
-                << mNeighbors[i].neighborIds[ iNeighbor ]+1 << " at ("
+                << i << " at (" << mPolymerSystem[ 4*i+0 ] << ","
+                                << mPolymerSystem[ 4*i+1 ] << ","
+                                << mPolymerSystem[ 4*i+2 ] << ") and monomer "
+                << mNeighbors[i].neighborIds[ iNeighbor ] << " at ("
                 << neighbor[0] << "," << neighbor[1] << "," << neighbor[2] << ")"
                 << std::endl;
              throw std::runtime_error( msg.str() );
@@ -2389,6 +2398,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     std::clock_t const t0 = std::clock();
 
     auto const nSpecies = mnElementsInGroup.size();
+
+    mPolymerSystemOld = mPolymerSystem;
 
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
@@ -2757,7 +2768,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     /* untangle reordered array so that LeMonADE can use it again */
-    for ( size_t i = 0u; i < mnAllMonomers; ++i )
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
         auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
         if ( i < 10 )
@@ -2766,6 +2777,53 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         mPolymerSystem[ 4*i+1 ] = pTarget->y;
         mPolymerSystem[ 4*i+2 ] = pTarget->z;
         mPolymerSystem[ 4*i+3 ] = pTarget->w;
+    }
+
+    /**
+     * find jumps and "deapply" them. We just have to find jumps larger than
+     * the number of time steps calculated assuming the monomers can only move
+     * 1 cell per time step per direction (meaning this also works with
+     * diagonal moves!)
+     * If for example the box size is 32, but we also calculate with uint8,
+     * then the particles may seemingly move not only bei +-32, but also by
+     * +-256, but in both cases the particle actually only moves one virtual
+     * box.
+     * E.g. the particle was at 0 moved to -1 which was mapped to 255 because
+     * uint8 overflowed, but the box size is 64, then deltaMove=255 and we
+     * need to subtract 3*64. This only works if the box size is a multiple of
+     * the type maximum number (256). I.e. in any sane environment if the box
+     * size is a power of two, which was a requirement anyway already.
+     * Actually, as the position is just calculated as +-1 without any wrapping,
+     * the only way for jumps to happen is because of type overflows.
+     */
+    size_t nPrintInfo = 10;
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+    {
+        auto r0 = & mPolymerSystemOld[ 4*i ];
+        auto r1 = & mPolymerSystem   [ 4*i ];
+        std::vector< T_BoxSize > const boxSizes = { mBoxX, mBoxY, mBoxZ };
+        auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
+        for ( auto iCoord = 0u; iCoord < 3u; ++iCoord )
+        {
+            assert( boxSizeCudaType >= boxSizes[ iCoord ] );
+            //assert( nMonteCarloSteps <= boxSizeCudaType / 2 );
+            //assert( nMonteCarloSteps <= std::min( std::min( mBoxX, mBoxY ), mBoxZ ) / 2 );
+            auto const deltaMove = r1[ iCoord ] - r0[ iCoord ];
+            if ( std::abs( deltaMove ) > boxSizeCudaType / 2 )
+            {
+                if ( nPrintInfo > 0 )
+                {
+                    --nPrintInfo;
+                    std::cout
+                        << i << " " << char( 'x' + iCoord ) << ": "
+                        << r0[ iCoord ] << " -> " << r1[ iCoord ] << " -> "
+                        << r1[ iCoord ] - boxSizeCudaType + boxSizes[ iCoord ]
+                        << "\n";
+                }
+                r1[ iCoord ] -= boxSizeCudaType - boxSizes[ iCoord ];
+                mviPolymerSystemVirtualBox[ 4*i+iCoord ] -= deltaMove > decltype(deltaMove)(0) ? 1 : -1;
+            }
+        }
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
