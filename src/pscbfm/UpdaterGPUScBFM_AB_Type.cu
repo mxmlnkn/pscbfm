@@ -17,6 +17,8 @@
 #ifdef USE_UINT8_POSITIONS
 //#   define DO_OVERFLOW_CHECK_ON_HOST // only has a use with USE_UINT8_POSITIONS set
 #endif
+//#define USE_DOUBLE_BUFFERED_TMP_LATTICE
+
 
 /**
  * working combinations:
@@ -1487,6 +1489,7 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mLattice                         ( NULL ),
    mLatticeOut                      ( NULL ),
    mLatticeTmp                      ( NULL ),
+   mLatticeTmp2                     ( NULL ),
    mnAllMonomers                    ( 0    ),
    mnMonomersPadded                 ( 0    ),
    mPolymerSystemSorted             ( NULL ),
@@ -1544,6 +1547,7 @@ void UpdaterGPUScBFM_AB_Type::destruct()
     if ( mLattice != NULL ){ delete[] mLattice; mLattice = NULL; }  // setLatticeSize
     deletePointer( mLatticeOut                      ); // initialize
     deletePointer( mLatticeTmp                      ); // initialize
+    deletePointer( mLatticeTmp2                     ); // initialize
     deletePointer( mPolymerSystemSorted             ); // initialize
     deletePointer( mPolymerSystemSortedOld          ); // initialize
     deletePointer( mviPolymerSystemSortedVirtualBox ); // initialize
@@ -1972,9 +1976,11 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
         throw std::runtime_error( msg.str() );
     }
 
-    mLatticeOut = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
-    mLatticeTmp = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
-    mLatticeTmp->memsetAsync(0); // async as it is next needed in runSimulationOnGPU
+    mLatticeOut  = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
+    mLatticeTmp  = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
+    mLatticeTmp2 = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
+    mLatticeTmp ->memsetAsync(0); // async as it is next needed in runSimulationOnGPU
+    mLatticeTmp2->memsetAsync(0);
     /* populate latticeOut with monomers from mPolymerSystem */
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
     for ( T_Id iMonomer = 0; iMonomer < mnAllMonomers; ++iMonomer )
@@ -2632,6 +2638,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
     mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
     auto const nSpecies = mnElementsInGroup.size();
+    cudaStream_t streamMemset = 0;
 
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
@@ -2825,9 +2832,24 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                                   (uint64_t*)( mLatticeTmp->gpu + mLatticeTmp->nElements ), 0 );
                 #else
                     #ifdef USE_BIT_PACKING_TMP_LATTICE
-                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes / CHAR_BIT, mStream );
+                        auto const nBytesToDelete = mLatticeTmp->nBytes / CHAR_BIT;
                     #else
-                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream );
+                        auto const nBytesToDelete = mLatticeTmp->nBytes;
+                    #endif
+                    #ifdef USE_DOUBLE_BUFFERED_TMP_LATTICE
+                        /* wait for calculations to finish before we can delete */
+                        CUDA_ERROR( cudaStreamSynchronize( mStream ) );
+                        /* delete the tmp buffer we have used in the last step */
+                        if ( streamMemset == 0 )
+                            CUDA_ERROR( cudaStreamCreate( & streamMemset ) )
+                        #if 0
+                            cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, nBytesToDelete, streamMemset );
+                        #else
+                            cudaMemcpyAsync( (void*) mLatticeTmp->gpu, (void*) mLatticeTmp->host, nBytesToDelete, cudaMemcpyHostToDevice, streamMemset );
+                        #endif
+                        std::swap( mLatticeTmp, mLatticeTmp2 );
+                    #else
+                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, nBytesToDelete, mStream );
                     #endif
                 #endif
             }
