@@ -1921,10 +1921,6 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         auto const y = mPolymerSystem.at( 4*i+1 );
         auto const z = mPolymerSystem.at( 4*i+2 );
 
-        mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
-        mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
-        mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
-
         mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
         mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
         mPolymerSystemSorted->host[ miToiNew[i] ].z = z & mBoxZM1;
@@ -2542,7 +2538,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 {
     std::clock_t const t0 = std::clock();
 
-    auto const mPolymerSystemOld = mPolymerSystem;
+    mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
     CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
     auto const nSpecies = mnElementsInGroup.size();
     //std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
@@ -2959,8 +2955,10 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     size_t nPrintInfo = 10;
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
-        auto r0 = & mPolymerSystemOld[ 4*i ];
-        auto r1 = & mPolymerSystem   [ 4*i ];
+        auto const r0tmp = mPolymerSystemSortedOld->host[ miToiNew[i] ];
+        auto const r1tmp = mPolymerSystemSorted   ->host[ miToiNew[i] ];
+        T_UCoordinateCuda r0[3] = { r0tmp.x, r0tmp.y, r0tmp.z };
+        T_UCoordinateCuda r1[3] = { r1tmp.x, r1tmp.y, r1tmp.z };
         std::vector< T_BoxSize > const boxSizes = { mBoxX, mBoxY, mBoxZ };
         auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
         for ( auto iCoord = 0u; iCoord < 3u; ++iCoord )
@@ -2977,7 +2975,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     std::cout
                         << i << " " << char( 'x' + iCoord ) << ": "
                         << r0[ iCoord ] << " -> " << r1[ iCoord ] << " -> "
-                        << r1[ iCoord ] - boxSizeCudaType + boxSizes[ iCoord ]
+                        << T_Coordinate( r1[ iCoord ] - ( boxSizeCudaType - boxSizes[ iCoord ] ) )
                         << "\n";
                 }
                 r1[ iCoord ] -= boxSizeCudaType - boxSizes[ iCoord ];

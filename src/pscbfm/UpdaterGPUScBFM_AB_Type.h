@@ -199,7 +199,6 @@ private:
      */
     size_t mnAllMonomers;
     std::vector< T_Coordinate > mPolymerSystem;
-    std::vector< T_Coordinate > mPolymerSystemOld;
     std::vector< T_Coordinate > mviPolymerSystemVirtualBox;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array

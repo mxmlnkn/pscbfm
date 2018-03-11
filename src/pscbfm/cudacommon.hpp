@@ -1442,6 +1442,22 @@ public:
     }
     inline void memsetAsync( uint8_t const value = 0 ){ memset( value, true ); }
 
+    inline void memcpyFrom( MirroredVector<T> const & from, int const rAsync = -1 )
+    {
+        auto const nMinBytes = std::min( nBytes, from.nBytes );
+        //assert( nBytes == from->nBytes );
+        assert( from.host != NULL );
+        assert( from.gpu  != NULL );
+        assert( host != NULL );
+        assert( gpu  != NULL );
+        CUDA_ERROR( cudaMemcpyAsync( (void*) gpu, (void*) from.gpu, nMinBytes,
+                                     cudaMemcpyDeviceToDevice, mStream ) );
+        std::memcpy( (void*) host, (void*) from.host, nMinBytes );
+        if ( ( rAsync == -1 && ! mAsync ) || ! rAsync )
+            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
+    }
+    inline void memcpyFromAsync( MirroredVector<T> const & from ){ memcpyFrom( from, true ); }
+
     inline void free()
     {
         if ( host != NULL )
