@@ -2305,9 +2305,9 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     mPolymerSystem.at( 4*i+2 ) = z;
 }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX + mPolymerSystem.at( 4*i+0 ); }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY + mPolymerSystem.at( 4*i+1 ); }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ + mPolymerSystem.at( 4*i+2 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mPolymerSystem.at( 4*i+0 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mPolymerSystem.at( 4*i+1 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mPolymerSystem.at( 4*i+2 ); }
 
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
@@ -2917,18 +2917,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     mviPolymerSystemSortedVirtualBox->pop();
     CUDA_ERROR( cudaStreamSynchronize( mStream ) );
 
-    /* untangle reordered array so that LeMonADE can use it again */
-    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
-    {
-        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
-        if ( i < 10 )
-            mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
-        mPolymerSystem[ 4*i+0 ] = pTarget->x;
-        mPolymerSystem[ 4*i+1 ] = pTarget->y;
-        mPolymerSystem[ 4*i+2 ] = pTarget->z;
-        mPolymerSystem[ 4*i+3 ] = pTarget->w;
-    }
-
     /**
      * find jumps and "deapply" them. We just have to find jumps larger than
      * the number of time steps calculated assuming the monomers can only move
@@ -2987,6 +2975,18 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = iv[2];
     }
     mviPolymerSystemSortedVirtualBox->pushAsync();
+
+    /* untangle reordered array so that LeMonADE can use it again */
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+    {
+        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
+        if ( i < 10 )
+            mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
+        mPolymerSystem[ 4*i+0 ] = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
+        mPolymerSystem[ 4*i+1 ] = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
+        mPolymerSystem[ 4*i+2 ] = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
+        mPolymerSystem[ 4*i+3 ] = pTarget->w;
+    }
 
     checkSystem(); // no-op if "Check"-level deactivated
 
