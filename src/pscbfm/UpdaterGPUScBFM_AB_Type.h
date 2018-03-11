@@ -143,7 +143,8 @@ public:
     using T_Coordinate       = int32_t; // int64_t // should be signed!
     using T_CoordinateCuda   = int8_t; // int32_t (int8_t, uint8_t does not work for a 256^3 box :S ??? )
     using T_UCoordinateCuda  = std::make_unsigned< T_CoordinateCuda >::type;
-    using T_CoordinatesCuda  = CudaVec4< T_CoordinateCuda >::value_type;
+    using T_Coordinates      = CudaVec4< T_Coordinate      >::value_type;
+    using T_CoordinatesCuda  = CudaVec4< T_CoordinateCuda  >::value_type;
     using T_UCoordinatesCuda = CudaVec4< T_UCoordinateCuda >::value_type;
     /* could also be uint8_t if you know you only have 256 different
      * species at maximum. For the autocoloring this is implicitly true,
@@ -212,6 +213,8 @@ private:
      */
     size_t mnMonomersPadded;
     MirroredVector< T_UCoordinatesCuda > * mPolymerSystemSorted;
+    MirroredVector< T_UCoordinatesCuda > * mPolymerSystemSortedOld;
+    MirroredVector< T_Coordinates      > * mviPolymerSystemSortedVirtualBox;
     /**
      * These are to be used for storing the flags and chosen direction of
      * the old property tag.

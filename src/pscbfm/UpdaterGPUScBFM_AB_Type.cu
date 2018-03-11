@@ -13,6 +13,10 @@
 //#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
 #define USE_ZCURVE_FOR_LATTICE
 //#define USE_MOORE_CURVE_FOR_LATTICE
+#define USE_UINT8_POSITIONS
+#ifdef USE_UINT8_POSITIONS
+#   define DO_OVERFLOW_CHECK_ON_HOST // only has a use with USE_UINT8_POSITIONS set
+#endif
 
 /**
  * working combinations:
@@ -71,14 +75,16 @@ namespace {
 
 
 /* shorten full type names for kernels */
-using T_Flags           = UpdaterGPUScBFM_AB_Type::T_Flags          ;
-using T_Lattice         = UpdaterGPUScBFM_AB_Type::T_Lattice        ;
-using vecIntCUDA        = UpdaterGPUScBFM_AB_Type::T_CoordinatesCuda;
-using T_Coordinate      = UpdaterGPUScBFM_AB_Type::T_Coordinate     ;
-using T_CoordinateCuda  = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda ;
-using T_UCoordinateCuda = UpdaterGPUScBFM_AB_Type::T_UCoordinateCuda;
-using T_Id              = UpdaterGPUScBFM_AB_Type::T_Id             ;
-using vecUIntCUDA       = CudaVec4< T_UCoordinateCuda >::value_type ;
+using T_Flags            = UpdaterGPUScBFM_AB_Type::T_Flags           ;
+using T_Lattice          = UpdaterGPUScBFM_AB_Type::T_Lattice         ;
+using vecIntCUDA         = UpdaterGPUScBFM_AB_Type::T_CoordinatesCuda ;
+using T_Coordinate       = UpdaterGPUScBFM_AB_Type::T_Coordinate      ;
+using T_CoordinateCuda   = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda  ;
+using T_Coordinates      = UpdaterGPUScBFM_AB_Type::T_Coordinates     ;
+using T_UCoordinateCuda  = UpdaterGPUScBFM_AB_Type::T_UCoordinateCuda ;
+using T_UCoordinatesCuda = UpdaterGPUScBFM_AB_Type::T_UCoordinatesCuda;
+using T_Id               = UpdaterGPUScBFM_AB_Type::T_Id              ;
+using vecUIntCUDA        = CudaVec4< T_UCoordinateCuda >::value_type  ;
 
 
 /* 512=8^3 for a range of bonds per direction of [-4,3] */
@@ -111,6 +117,9 @@ __device__ __constant__ T_CoordinateCuda DZTableIntCUDA_d[6];
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
  * the same constant */
+__device__ __constant__ uint32_t dcBoxX     ;  // mLattice size in X
+__device__ __constant__ uint32_t dcBoxY     ;  // mLattice size in Y
+__device__ __constant__ uint32_t dcBoxZ     ;  // mLattice size in Z
 __device__ __constant__ uint32_t dcBoxXM1   ;  // mLattice size in X-1
 __device__ __constant__ uint32_t dcBoxYM1   ;  // mLattice size in Y-1
 __device__ __constant__ uint32_t dcBoxZM1   ;  // mLattice size in Z-1
@@ -1405,27 +1414,95 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
 }
 
 
+/**
+ * find jumps and "deapply" them. We just have to find jumps larger than
+ * the number of time steps calculated assuming the monomers can only move
+ * 1 cell per time step per direction (meaning this also works with
+ * diagonal moves!)
+ * If for example the box size is 32, but we also calculate with uint8,
+ * then the particles may seemingly move not only bei +-32, but also by
+ * +-256, but in both cases the particle actually only moves one virtual
+ * box.
+ * E.g. the particle was at 0 moved to -1 which was mapped to 255 because
+ * uint8 overflowed, but the box size is 64, then deltaMove=255 and we
+ * need to subtract 3*64. This only works if the box size is a multiple of
+ * the type maximum number (256). I.e. in any sane environment if the box
+ * size is a power of two, which was a requirement anyway already.
+ * Actually, as the position is just calculated as +-1 without any wrapping,
+ * the only way for jumps to happen is because of type overflows.
+ */
+__global__ void kernelTreatOverflows
+(
+    T_UCoordinatesCuda * const dpPolymerSystemOld        ,
+    T_UCoordinatesCuda * const dpPolymerSystem           ,
+    T_Coordinates      * const dpiPolymerSystemVirtualBox,
+    T_Id                 const nMonomers
+)
+{
+    for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+          iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
+    {
+        auto const r0 = dpPolymerSystemOld        [ iMonomer ];
+        auto       r1 = dpPolymerSystem           [ iMonomer ];
+        auto       iv = dpiPolymerSystemVirtualBox[ iMonomer ];
+        T_UCoordinatesCuda const dr = {
+            T_UCoordinateCuda( r1.x - r0.x ),
+            T_UCoordinateCuda( r1.y - r0.y ),
+            T_UCoordinateCuda( r1.z - r0.z )
+        };
+
+        auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
+        assert( boxSizeCudaType >= dcBoxX );
+        assert( boxSizeCudaType >= dcBoxY );
+        assert( boxSizeCudaType >= dcBoxZ );
+        //assert( nMonteCarloSteps < boxSizeCudaType / 2 );
+        //assert( nMonteCarloSteps <= std::min( std::min( mBoxX, mBoxY ), mBoxZ ) / 2 );
+
+        if ( std::abs( dr.x ) > T_UCoordinateCuda( boxSizeCudaType / 2 ) )
+        {
+            r1.x -= boxSizeCudaType - dcBoxX;
+            iv.x -= dr.x > T_UCoordinateCuda(0) ? 1 : -1;
+        }
+        if ( std::abs( dr.y ) > T_UCoordinateCuda( boxSizeCudaType / 2 ) )
+        {
+            r1.y -= boxSizeCudaType - dcBoxY;
+            iv.y -= dr.y > decltype( dr.y )(0) ? 1 : -1;
+        }
+        if ( std::abs( dr.z ) > T_UCoordinateCuda( boxSizeCudaType / 2 ) )
+        {
+            r1.z -= boxSizeCudaType - dcBoxZ;
+            iv.z -= dr.z > T_UCoordinateCuda(0) ? 1 : -1;
+        }
+
+        dpPolymerSystem           [ iMonomer ] = r1;
+        dpiPolymerSystemVirtualBox[ iMonomer ] = iv;
+    }
+}
+
+
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
- : mStream              ( 0 ),
-   mLattice             ( NULL ),
-   mLatticeOut          ( NULL ),
-   mLatticeTmp          ( NULL ),
-   mnAllMonomers        ( 0 ),
-   mnMonomersPadded     ( 0 ),
-   mPolymerSystemSorted ( NULL ),
-   mPolymerFlags        ( NULL ),
-   mNeighborsSorted     ( NULL ),
-   mNeighborsSortedSizes( NULL ),
-   mNeighborsSortedInfo ( nBytesAlignment ),
-   mAttributeSystem     ( NULL ),
-   mBoxX                ( 0 ),
-   mBoxY                ( 0 ),
-   mBoxZ                ( 0 ),
-   mBoxXM1              ( 0 ),
-   mBoxYM1              ( 0 ),
-   mBoxZM1              ( 0 ),
-   mBoxXLog2            ( 0 ),
-   mBoxXYLog2           ( 0 )
+ : mStream                          ( 0    ),
+   mLattice                         ( NULL ),
+   mLatticeOut                      ( NULL ),
+   mLatticeTmp                      ( NULL ),
+   mnAllMonomers                    ( 0    ),
+   mnMonomersPadded                 ( 0    ),
+   mPolymerSystemSorted             ( NULL ),
+   mPolymerSystemSortedOld          ( NULL ),
+   mviPolymerSystemSortedVirtualBox ( NULL ),
+   mPolymerFlags                    ( NULL ),
+   mNeighborsSorted                 ( NULL ),
+   mNeighborsSortedSizes            ( NULL ),
+   mNeighborsSortedInfo             ( nBytesAlignment ),
+   mAttributeSystem                 ( NULL ),
+   mBoxX                            ( 0    ),
+   mBoxY                            ( 0    ),
+   mBoxZ                            ( 0    ),
+   mBoxXM1                          ( 0    ),
+   mBoxYM1                          ( 0    ),
+   mBoxZM1                          ( 0    ),
+   mBoxXLog2                        ( 0    ),
+   mBoxXYLog2                       ( 0    )
 {
     /**
      * Log control.
@@ -1442,19 +1519,34 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
     mLog.deactivate( "Warning"   );
 }
 
+namespace {
+
+template< typename T >
+inline void deletePointer( T * & p )
+{
+    if ( p != NULL )
+    {
+        delete p;
+        p = NULL;
+    }
+}
+
+}
+
 /**
  * Deletes everything which could and is allocated
  */
 void UpdaterGPUScBFM_AB_Type::destruct()
 {
-    if ( mLattice         != NULL ){ delete[] mLattice        ; mLattice         = NULL; }  // setLatticeSize
-    if ( mLatticeOut      != NULL ){ delete   mLatticeOut     ; mLatticeOut      = NULL; }  // initialize
-    if ( mLatticeTmp      != NULL ){ delete   mLatticeTmp     ; mLatticeTmp      = NULL; }  // initialize
-    if ( mPolymerSystemSorted != NULL ){ delete mPolymerSystemSorted; mPolymerSystemSorted = NULL; }  // initialize
-    if ( mPolymerFlags    != NULL ){ delete   mPolymerFlags   ; mPolymerFlags    = NULL; }  // initialize
-    if ( mNeighborsSorted != NULL ){ delete   mNeighborsSorted; mNeighborsSorted = NULL; }  // initialize
-    if ( mNeighborsSortedSizes != NULL ){ delete   mNeighborsSortedSizes; mNeighborsSortedSizes = NULL; }  // initialize
-    if ( mAttributeSystem != NULL ){ delete[] mAttributeSystem; mAttributeSystem = NULL; }  // setNrOfAllMonomers
+    if ( mLattice != NULL ){ delete[] mLattice; mLattice = NULL; }  // setLatticeSize
+    deletePointer( mLatticeOut                      ); // initialize
+    deletePointer( mLatticeTmp                      ); // initialize
+    deletePointer( mPolymerSystemSorted             ); // initialize
+    deletePointer( mPolymerSystemSortedOld          ); // initialize
+    deletePointer( mviPolymerSystemSortedVirtualBox ); // initialize
+    deletePointer( mPolymerFlags                    ); // initialize
+    deletePointer( mNeighborsSorted                 ); // initialize
+    deletePointer( mNeighborsSortedSizes            ); // initialize
 }
 
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
@@ -2030,6 +2122,16 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         mLog( "Stats" ) << msg.str();
     }
 
+    /**
+     * "When you execute asynchronous CUDA commands without specifying
+     * a stream, * the runtime uses the default stream. Before CUDA 7,
+     * the default stream is  * a special stream which implicitly
+     * synchronizes with all other streams on the device."
+     * @see https://devblogs.nvidia.com/gpu-pro-tip-cuda-7-streams-simplify-concurrency/
+     */
+    if ( mStream == 0 )
+        CUDA_ERROR( cudaStreamCreate( &mStream ) );
+
     initializeBondTable();
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
     checkMonomerReorderMapping();
@@ -2047,6 +2149,9 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     checkSystem();
     initializeLattices();
 
+    { decltype( dcBoxX      ) x = mBoxX     ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxX     , &x, sizeof(x) ) ); }
+    { decltype( dcBoxY      ) x = mBoxY     ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxY     , &x, sizeof(x) ) ); }
+    { decltype( dcBoxZ      ) x = mBoxZ     ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZ     , &x, sizeof(x) ) ); }
     { decltype( dcBoxXM1    ) x = mBoxXM1   ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXM1   , &x, sizeof(x) ) ); }
     { decltype( dcBoxYM1    ) x = mBoxYM1   ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxYM1   , &x, sizeof(x) ) ); }
     { decltype( dcBoxZM1    ) x = mBoxZM1   ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &x, sizeof(x) ) ); }
@@ -2397,9 +2502,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 {
     std::clock_t const t0 = std::clock();
 
+    auto const mPolymerSystemOld = mPolymerSystem;
+    CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
     auto const nSpecies = mnElementsInGroup.size();
-
-    mPolymerSystemOld = mPolymerSystem;
 
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
