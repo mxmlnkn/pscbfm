@@ -2437,14 +2437,6 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
      * the only way for jumps to happen is because of type overflows.
      */
 
-    cudaEvent_t tOverflowCheck0, tOverflowCheck1;
-    if ( mLog.isActive( "Benchmark" ) )
-    {
-        cudaEventCreate( &tOverflowCheck0 );
-        cudaEventCreate( &tOverflowCheck1 );
-        cudaEventRecord( tOverflowCheck0, mStream );
-    }
-
 #if defined( DO_OVERFLOW_CHECK_ON_HOST )
     mPolymerSystemSorted            ->pop();
     mviPolymerSystemSortedVirtualBox->pop();
@@ -2492,36 +2484,22 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
     }
     mviPolymerSystemSortedVirtualBox->pushAsync();
 #else
-    for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
-    {
-        auto const nThreads = 128;
-        auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
-        /* @todo each species can calculate in parallel */
-        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
-            mPolymerSystemSortedOld         ->gpu + viSubGroupOffsets[ iSpecies ],
-            mPolymerSystemSorted            ->gpu + viSubGroupOffsets[ iSpecies ],
-            mviPolymerSystemSortedVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
-            mnElementsInGroup[ iSpecies ]
-        );
-    }
+    auto const nThreads = 128;
+    auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
+    /* the padding values do not change, so we can simply let the threads
+     * calculate them without worries and save the loop over the species */
+    kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+        mPolymerSystemSortedOld         ->gpu,
+        mPolymerSystemSorted            ->gpu,
+        mviPolymerSystemSortedVirtualBox->gpu,
+        mnMonomersPadded
+    );
     if ( copyToHost )
     {
         mPolymerSystemSorted            ->pop();
         mviPolymerSystemSortedVirtualBox->pop();
     }
 #endif
-
-    if ( mLog.isActive( "Benchmark" ) )
-    {
-        // https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/#disqus_thread
-        cudaEventRecord( tOverflowCheck1, mStream );
-        cudaEventSynchronize( tOverflowCheck1 );  // basically a StreamSynchronize
-        float milliseconds = 0;
-        cudaEventElapsedTime( & milliseconds, tOverflowCheck0, tOverflowCheck1 );
-        std::stringstream sBuffered;
-        sBuffered << "tOverflowCheck = " << milliseconds / 1000. << "s\n";
-        mLog( "Benchmark" ) << sBuffered.str();
-    }
 }
 
 /**
@@ -2730,13 +2708,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         cudaEventCreate( &tGpu0 );
         cudaEventCreate( &tGpu1 );
         cudaEventRecord( tGpu0, mStream );
-    }
-
-    cudaEvent_t tOverflowCheck0, tOverflowCheck1;
-    if ( mLog.isActive( "Benchmark" ) )
-    {
-        cudaEventCreate( &tOverflowCheck0 );
-        cudaEventCreate( &tOverflowCheck1 );
     }
 
     /* run simulation */
@@ -3031,7 +3002,27 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     #if defined( USE_UINT8_POSITIONS )
+        cudaEvent_t tOverflowCheck0, tOverflowCheck1;
+        if ( mLog.isActive( "Benchmark" ) )
+        {
+            cudaEventCreate( &tOverflowCheck0 );
+            cudaEventCreate( &tOverflowCheck1 );
+            cudaEventRecord( tOverflowCheck0, mStream );
+        }
+
         findAndRemoveOverflows();
+
+        if ( mLog.isActive( "Benchmark" ) )
+        {
+            // https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/#disqus_thread
+            cudaEventRecord( tOverflowCheck1, mStream );
+            cudaEventSynchronize( tOverflowCheck1 );  // basically a StreamSynchronize
+            float milliseconds = 0;
+            cudaEventElapsedTime( & milliseconds, tOverflowCheck0, tOverflowCheck1 );
+            std::stringstream sBuffered;
+            sBuffered << "tOverflowCheck = " << milliseconds / 1000. << "s\n";
+            mLog( "Benchmark" ) << sBuffered.str();
+        }
     #endif
 
     /* untangle reordered array so that LeMonADE can use it again */
