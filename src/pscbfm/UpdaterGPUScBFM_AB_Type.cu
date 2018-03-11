@@ -1899,9 +1899,9 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
 void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
 {
     /* sort groups into new array and save index mappings */
-    assert( mPolymerSystemSorted       == NULL );
-    assert( mPolymerSystemSortedOld    == NULL );
-    assert( mviPolymerSystemVirtualBox == NULL );
+    assert( mPolymerSystemSorted             == NULL );
+    assert( mPolymerSystemSortedOld          == NULL );
+    assert( mviPolymerSystemSortedVirtualBox == NULL );
     mPolymerSystemSorted             = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
     mPolymerSystemSortedOld          = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
     mviPolymerSystemSortedVirtualBox = new MirroredVector< T_Coordinates      >( mnMonomersPadded, mStream );
@@ -2541,7 +2541,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
     mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
     auto const nSpecies = mnElementsInGroup.size();
-    //std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
 
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
@@ -2908,9 +2907,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
         /* @todo each species can calculate in parallel */
         kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
-            mPolymerSystemSortedOld   ->gpu + viSubGroupOffsets[ iSpecies ],
-            mPolymerSystemSorted      ->gpu + viSubGroupOffsets[ iSpecies ],
-            mviPolymerSystemVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
+            mPolymerSystemSortedOld         ->gpu + viSubGroupOffsets[ iSpecies ],
+            mPolymerSystemSorted            ->gpu + viSubGroupOffsets[ iSpecies ],
+            mviPolymerSystemSortedVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
             mnElementsInGroup[ iSpecies ]
         );
     }
@@ -2955,10 +2954,13 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     size_t nPrintInfo = 10;
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
-        auto const r0tmp = mPolymerSystemSortedOld->host[ miToiNew[i] ];
-        auto const r1tmp = mPolymerSystemSorted   ->host[ miToiNew[i] ];
+        auto const r0tmp = mPolymerSystemSortedOld         ->host[ miToiNew[i] ];
+        auto const r1tmp = mPolymerSystemSorted            ->host[ miToiNew[i] ];
+        auto const ivtmp = mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
         T_UCoordinateCuda r0[3] = { r0tmp.x, r0tmp.y, r0tmp.z };
         T_UCoordinateCuda r1[3] = { r1tmp.x, r1tmp.y, r1tmp.z };
+        T_Coordinate      iv[3] = { ivtmp.x, ivtmp.y, ivtmp.z };
+
         std::vector< T_BoxSize > const boxSizes = { mBoxX, mBoxY, mBoxZ };
         auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
         for ( auto iCoord = 0u; iCoord < 3u; ++iCoord )
@@ -2972,9 +2974,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 if ( nPrintInfo > 0 )
                 {
                     --nPrintInfo;
-                    std::cout
+                    mLog( "Info" )
                         << i << " " << char( 'x' + iCoord ) << ": "
-                        << r0[ iCoord ] << " -> " << r1[ iCoord ] << " -> "
+                        << (int) r0[ iCoord ] << " -> " << (int) r1[ iCoord ] << " -> "
                         << T_Coordinate( r1[ iCoord ] - ( boxSizeCudaType - boxSizes[ iCoord ] ) )
                         << "\n";
                 }
@@ -2985,6 +2987,12 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         mPolymerSystemSorted->host[ miToiNew[i] ].x = r1[0];
         mPolymerSystemSorted->host[ miToiNew[i] ].y = r1[1];
         mPolymerSystemSorted->host[ miToiNew[i] ].z = r1[2];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = iv[0];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = iv[1];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = iv[2];
+        //mviPolymerSystemVirtualBox.at( 4*i+0 ) = iv[0];
+        //mviPolymerSystemVirtualBox.at( 4*i+1 ) = iv[1];
+        //mviPolymerSystemVirtualBox.at( 4*i+2 ) = iv[2];
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
