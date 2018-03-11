@@ -172,6 +172,15 @@ private:
      */
     T_Lattice * mLattice; // being used for checkLattice nothing else ...
     MirroredTexture< T_Lattice > * mLatticeOut, * mLatticeTmp, * mLatticeTmp2;
+    /**
+     * when using bit packing only 1/8 of mLatticeTmp is used. In order to
+     * to using everything we can simply increment the mLatticeTmp->gpu pointer,
+     * but for textures this is not possible so easily, therefore we need to
+     * store texture objects for each bit packed sub lattice in mLatticeTmp.
+     * Then after 8 usages we can call one cudaMemset for all, possibly making
+     * 8 times better use of parallelism on the GPU!
+     */
+    cudaTextureObject_t mvtLatticeTmp[ CHAR_BIT ];
 
     /* copy into mPolymerSystem and drop the property tag while doing so.
      * would be easier and probably more efficient if mPolymerSystem_device/host

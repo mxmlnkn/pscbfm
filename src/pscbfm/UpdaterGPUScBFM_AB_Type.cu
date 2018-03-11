@@ -18,6 +18,9 @@
 //#   define DO_OVERFLOW_CHECK_ON_HOST // only has a use with USE_UINT8_POSITIONS set
 #endif
 //#define USE_DOUBLE_BUFFERED_TMP_LATTICE
+#if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
+#   define USE_EIGHTFOLD_BUFFERED_TMP_LATTICE
+#endif
 
 
 /**
@@ -1997,6 +2000,28 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
         << "particles in a (" << mBoxX << "," << mBoxY << "," << mBoxZ << ") box "
         << "=> " << 100. * mnAllMonomers / ( mBoxX * mBoxY * mBoxZ ) << "%\n"
         << "Note: densest packing is: 25% -> in this case it might be more reasonable to actually iterate over the spaces where particles can move to, keeping track of them instead of iterating over the particles\n";
+
+    #if defined( USE_EIGHTFOLD_BUFFERED_TMP_LATTICE )
+        cudaResourceDesc mResDesc;
+        cudaTextureDesc  mTexDesc;
+        std::memset( &mResDesc, 0, sizeof( mResDesc ) );
+        mResDesc.resType = cudaResourceTypeLinear;
+        mResDesc.res.linear.desc.f = cudaChannelFormatKindUnsigned;
+        mResDesc.res.linear.desc.x = sizeof( mLatticeTmp->gpu[0] ) * CHAR_BIT; // bits per channel
+        std::memset( &mTexDesc, 0, sizeof( mTexDesc ) );
+        mTexDesc.readMode = cudaReadModeElementType;
+        for ( auto i = 0u; i < CHAR_BIT; ++i )
+        {
+            mLog( "Info" )
+                << "Bind texture for " << i << "-th temporary lattice buffer "
+                << "to mLatticeTmp->gpu + " << ( i * mLatticeTmp->nBytes / CHAR_BIT )
+                << "\n";
+            mResDesc.res.linear.sizeInBytes = mLatticeTmp->nBytes / CHAR_BIT;
+            mResDesc.res.linear.devPtr      = mLatticeTmp->gpu + i * mLatticeTmp->nBytes / CHAR_BIT;
+            /* the last three arguments are pointers to constants! */
+            cudaCreateTextureObject( &mvtLatticeTmp[i], &mResDesc, &mTexDesc, NULL );
+        }
+    #endif
 }
 
 void UpdaterGPUScBFM_AB_Type::checkMonomerReorderMapping( void )
@@ -2638,7 +2663,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
     mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
     auto const nSpecies = mnElementsInGroup.size();
-    cudaStream_t streamMemset = 0;
+    #if defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
+        cudaStream_t streamMemset = 0;
+    #endif
 
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
@@ -2742,6 +2769,15 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
          *  - each particle could be touched, not just one group */
         for ( uint32_t iSubStep = 0; iSubStep < nSpecies; ++iSubStep )
         {
+            #if defined( USE_EIGHTFOLD_BUFFERED_TMP_LATTICE )
+                auto const iStepTotal = iStep * nSpecies + iSubStep;
+                auto const iOffsetLatticeTmp = ( iStepTotal % CHAR_BIT ) * ( mLatticeTmp->nBytes / CHAR_BIT );
+                auto const texLatticeTmp = mvtLatticeTmp[ iStepTotal % CHAR_BIT ];
+            #else
+                auto const iOffsetLatticeTmp = 0u;
+                auto const texLatticeTmp = mLatticeTmp->texture;
+            #endif
+
             /* randomly choose which monomer group to advance */
             auto const iSpecies = randomNumbers.r250_rand32() % nSpecies;
             auto const seed     = randomNumbers.r250_rand32();
@@ -2764,7 +2800,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu ),
                 mPolymerFlags->gpu,
                 viSubGroupOffsets[ iSpecies ],
-                mLatticeTmp->gpu,
+                mLatticeTmp->gpu + iOffsetLatticeTmp,
                 mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
                 mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
                 mNeighborsSortedSizes->gpu,
@@ -2779,7 +2815,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu ),
                     mPolymerFlags->gpu,
                     viSubGroupOffsets[ iSpecies ],
-                    mLatticeTmp->gpu,
+                    mLatticeTmp->gpu + iOffsetLatticeTmp,
                     mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
                     mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
                     mNeighborsSortedSizes->gpu,
@@ -2797,7 +2833,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
-                    mLatticeTmp->texture
+                    texLatticeTmp
                 );
             }
             else
@@ -2808,7 +2844,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
-                    mLatticeTmp->texture
+                    texLatticeTmp
                 );
             }
 
@@ -2820,14 +2856,20 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     mPolymerFlags->gpu + viSubGroupOffsets[ iSpecies ],
                     mLatticeOut->gpu,
                     mnElementsInGroup[ iSpecies ],
-                    mLatticeTmp->texture,
+                    texLatticeTmp,
                     dpFiltered
                 );
             }
 
             if ( useCudaMemset )
             {
-                #ifdef USE_THRUST_FILL
+                #if defined( USE_EIGHTFOLD_BUFFERED_TMP_LATTICE )
+                    /* we only need to delete when buffers will wrap around and
+                     * on the last loop, so that on next runSimulationOnGPU
+                     * call mLatticeTmp is clean */
+                    if ( iStepTotal % 8 == 0 || ( iStep == nMonteCarloSteps-1 && iSubStep == nSpecies-1 ) )
+                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream );
+                #elif defined( USE_THRUST_FILL )
                     thrust::fill( thrust::system::cuda::par, (uint64_t*)  mLatticeTmp->gpu,
                                   (uint64_t*)( mLatticeTmp->gpu + mLatticeTmp->nElements ), 0 );
                 #else
