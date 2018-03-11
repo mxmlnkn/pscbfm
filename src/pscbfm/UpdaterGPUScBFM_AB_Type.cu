@@ -2138,6 +2138,19 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     if ( mStream == 0 )
         CUDA_ERROR( cudaStreamCreate( &mStream ) );
 
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+    {
+        auto const x = mPolymerSystem.at( 4*i+0 );
+        auto const y = mPolymerSystem.at( 4*i+1 );
+        auto const z = mPolymerSystem.at( 4*i+2 );
+        mviPolymerSystemVirtualBox.at( 4*i+0 ) = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+        mviPolymerSystemVirtualBox.at( 4*i+1 ) = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+        mviPolymerSystemVirtualBox.at( 4*i+2 ) = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+        mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
+        mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
+        mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
+    }
+
     initializeBondTable();
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
     checkMonomerReorderMapping();
@@ -2271,13 +2284,9 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
         throw std::invalid_argument( msg.str() );
     }
 #endif
-    mviPolymerSystemVirtualBox.at( 4*i+0 ) = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-    mviPolymerSystemVirtualBox.at( 4*i+1 ) = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-    mviPolymerSystemVirtualBox.at( 4*i+2 ) = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
-    mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
-    mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
-    mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
-    //std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
+    mPolymerSystem.at( 4*i+0 ) = x;
+    mPolymerSystem.at( 4*i+1 ) = y;
+    mPolymerSystem.at( 4*i+2 ) = z;
 }
 
 int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+0 ) * mBoxX + mPolymerSystem.at( 4*i+0 ); }
@@ -2511,6 +2520,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     auto const mPolymerSystemOld = mPolymerSystem;
     CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
     auto const nSpecies = mnElementsInGroup.size();
+    //std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
 
     /**
      * Statistics (min, max, mean, stddev) on filtering. Filtered because of:
