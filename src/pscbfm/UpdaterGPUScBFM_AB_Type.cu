@@ -2410,6 +2410,121 @@ void UpdaterGPUScBFM_AB_Type::populateLattice()
 }
 
 /**
+ * Uses mPolymerSystemSortedOld and mPolymerSystemSorted and finds overflows
+ * assuming a given physical known maximum movement since the old data.
+ * Both inputs are assumed to be on the gpu!
+ * If so, then the overflow is reversed if it happened because of data type
+ * overflow and/or is counted into mviPolymerSystemSortedVirtualBox if it
+ * happened because of the periodic boundary condition of the box.
+ */
+void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
+{
+    /**
+     * find jumps and "deapply" them. We just have to find jumps larger than
+     * the number of time steps calculated assuming the monomers can only move
+     * 1 cell per time step per direction (meaning this also works with
+     * diagonal moves!)
+     * If for example the box size is 32, but we also calculate with uint8,
+     * then the particles may seemingly move not only bei +-32, but also by
+     * +-256, but in both cases the particle actually only moves one virtual
+     * box.
+     * E.g. the particle was at 0 moved to -1 which was mapped to 255 because
+     * uint8 overflowed, but the box size is 64, then deltaMove=255 and we
+     * need to subtract 3*64. This only works if the box size is a multiple of
+     * the type maximum number (256). I.e. in any sane environment if the box
+     * size is a power of two, which was a requirement anyway already.
+     * Actually, as the position is just calculated as +-1 without any wrapping,
+     * the only way for jumps to happen is because of type overflows.
+     */
+
+    cudaEvent_t tOverflowCheck0, tOverflowCheck1;
+    if ( mLog.isActive( "Benchmark" ) )
+    {
+        cudaEventCreate( &tOverflowCheck0 );
+        cudaEventCreate( &tOverflowCheck1 );
+        cudaEventRecord( tOverflowCheck0, mStream );
+    }
+
+#if defined( DO_OVERFLOW_CHECK_ON_HOST )
+    mPolymerSystemSorted            ->pop();
+    mviPolymerSystemSortedVirtualBox->pop();
+    CUDA_ERROR( cudaStreamSynchronize( mStream ) );
+
+    size_t nPrintInfo = 10;
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+    {
+        auto const r0tmp = mPolymerSystemSortedOld         ->host[ miToiNew[i] ];
+        auto const r1tmp = mPolymerSystemSorted            ->host[ miToiNew[i] ];
+        auto const ivtmp = mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
+        T_UCoordinateCuda r0[3] = { r0tmp.x, r0tmp.y, r0tmp.z };
+        T_UCoordinateCuda r1[3] = { r1tmp.x, r1tmp.y, r1tmp.z };
+        T_Coordinate      iv[3] = { ivtmp.x, ivtmp.y, ivtmp.z };
+
+        std::vector< T_BoxSize > const boxSizes = { mBoxX, mBoxY, mBoxZ };
+        auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
+        for ( auto iCoord = 0u; iCoord < 3u; ++iCoord )
+        {
+            assert( boxSizeCudaType >= boxSizes[ iCoord ] );
+            //assert( nMonteCarloSteps <= boxSizeCudaType / 2 );
+            //assert( nMonteCarloSteps <= std::min( std::min( mBoxX, mBoxY ), mBoxZ ) / 2 );
+            auto const deltaMove = r1[ iCoord ] - r0[ iCoord ];
+            if ( std::abs( deltaMove ) > boxSizeCudaType / 2 )
+            {
+                if ( nPrintInfo > 0 )
+                {
+                    --nPrintInfo;
+                    mLog( "Info" )
+                        << i << " " << char( 'x' + iCoord ) << ": "
+                        << (int) r0[ iCoord ] << " -> " << (int) r1[ iCoord ] << " -> "
+                        << T_Coordinate( r1[ iCoord ] - ( boxSizeCudaType - boxSizes[ iCoord ] ) )
+                        << "\n";
+                }
+                r1[ iCoord ] -= boxSizeCudaType - boxSizes[ iCoord ];
+                iv[ iCoord ] -= deltaMove > decltype(deltaMove)(0) ? 1 : -1;
+            }
+        }
+        mPolymerSystemSorted->host[ miToiNew[i] ].x = r1[0];
+        mPolymerSystemSorted->host[ miToiNew[i] ].y = r1[1];
+        mPolymerSystemSorted->host[ miToiNew[i] ].z = r1[2];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = iv[0];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = iv[1];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = iv[2];
+    }
+    mviPolymerSystemSortedVirtualBox->pushAsync();
+#else
+    for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
+    {
+        auto const nThreads = 128;
+        auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
+        /* @todo each species can calculate in parallel */
+        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+            mPolymerSystemSortedOld         ->gpu + viSubGroupOffsets[ iSpecies ],
+            mPolymerSystemSorted            ->gpu + viSubGroupOffsets[ iSpecies ],
+            mviPolymerSystemSortedVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
+            mnElementsInGroup[ iSpecies ]
+        );
+    }
+    if ( copyToHost )
+    {
+        mPolymerSystemSorted            ->pop();
+        mviPolymerSystemSortedVirtualBox->pop();
+    }
+#endif
+
+    if ( mLog.isActive( "Benchmark" ) )
+    {
+        // https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/#disqus_thread
+        cudaEventRecord( tOverflowCheck1, mStream );
+        cudaEventSynchronize( tOverflowCheck1 );  // basically a StreamSynchronize
+        float milliseconds = 0;
+        cudaEventElapsedTime( & milliseconds, tOverflowCheck0, tOverflowCheck1 );
+        std::stringstream sBuffered;
+        sBuffered << "tOverflowCheck = " << milliseconds / 1000. << "s\n";
+        mLog( "Benchmark" ) << sBuffered.str();
+    }
+}
+
+/**
  * Checks for excluded volume condition and for correctness of all monomer bonds
  * Beware, it useses and thereby thrashes mLattice. Might be cleaner to declare
  * as const and malloc and free some temporary buffer, but the time ...
@@ -2627,6 +2742,23 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     /* run simulation */
     for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep )
     {
+        #if defined( USE_UINT8_POSITIONS )
+            /**
+             * for uint8_t we have to check for overflows every 127 steps, as
+             * for 128 steps we couldn't say whether it actually moved 128 steps
+             * or whether it moved 128 steps in the other direction and was wrapped
+             * to be equal to the hypothetical monomer above
+             */
+            auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
+            auto constexpr nStepsBetweenOverflowChecks = boxSizeCudaType / 2 - 1;
+            if ( iStep != 0 && iStep % nStepsBetweenOverflowChecks == 0 )
+            {
+                findAndRemoveOverflows( false );
+                CUDA_ERROR( cudaMemcpyAsync( mPolymerSystemSortedOld->gpu,
+                    mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes,
+                    cudaMemcpyDeviceToDevice, mStream ) );
+            }
+        #endif
         /* one Monte-Carlo step:
          *  - tries to move on average all particles one time
          *  - each particle could be touched, not just one group */
@@ -2898,98 +3030,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         }
     }
 
-    /**
-     * find jumps and "deapply" them. We just have to find jumps larger than
-     * the number of time steps calculated assuming the monomers can only move
-     * 1 cell per time step per direction (meaning this also works with
-     * diagonal moves!)
-     * If for example the box size is 32, but we also calculate with uint8,
-     * then the particles may seemingly move not only bei +-32, but also by
-     * +-256, but in both cases the particle actually only moves one virtual
-     * box.
-     * E.g. the particle was at 0 moved to -1 which was mapped to 255 because
-     * uint8 overflowed, but the box size is 64, then deltaMove=255 and we
-     * need to subtract 3*64. This only works if the box size is a multiple of
-     * the type maximum number (256). I.e. in any sane environment if the box
-     * size is a power of two, which was a requirement anyway already.
-     * Actually, as the position is just calculated as +-1 without any wrapping,
-     * the only way for jumps to happen is because of type overflows.
-     */
-    if ( mLog.isActive( "Benchmark" ) )
-        cudaEventRecord( tOverflowCheck0, mStream );
-#if defined( DO_OVERFLOW_CHECK_ON_HOST )
-    mPolymerSystemSorted            ->pop();
-    mviPolymerSystemSortedVirtualBox->pop();
-    CUDA_ERROR( cudaStreamSynchronize( mStream ) );
-
-    size_t nPrintInfo = 10;
-    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
-    {
-        auto const r0tmp = mPolymerSystemSortedOld         ->host[ miToiNew[i] ];
-        auto const r1tmp = mPolymerSystemSorted            ->host[ miToiNew[i] ];
-        auto const ivtmp = mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
-        T_UCoordinateCuda r0[3] = { r0tmp.x, r0tmp.y, r0tmp.z };
-        T_UCoordinateCuda r1[3] = { r1tmp.x, r1tmp.y, r1tmp.z };
-        T_Coordinate      iv[3] = { ivtmp.x, ivtmp.y, ivtmp.z };
-
-        std::vector< T_BoxSize > const boxSizes = { mBoxX, mBoxY, mBoxZ };
-        auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
-        for ( auto iCoord = 0u; iCoord < 3u; ++iCoord )
-        {
-            assert( boxSizeCudaType >= boxSizes[ iCoord ] );
-            //assert( nMonteCarloSteps <= boxSizeCudaType / 2 );
-            //assert( nMonteCarloSteps <= std::min( std::min( mBoxX, mBoxY ), mBoxZ ) / 2 );
-            auto const deltaMove = r1[ iCoord ] - r0[ iCoord ];
-            if ( std::abs( deltaMove ) > boxSizeCudaType / 2 )
-            {
-                if ( nPrintInfo > 0 )
-                {
-                    --nPrintInfo;
-                    mLog( "Info" )
-                        << i << " " << char( 'x' + iCoord ) << ": "
-                        << (int) r0[ iCoord ] << " -> " << (int) r1[ iCoord ] << " -> "
-                        << T_Coordinate( r1[ iCoord ] - ( boxSizeCudaType - boxSizes[ iCoord ] ) )
-                        << "\n";
-                }
-                r1[ iCoord ] -= boxSizeCudaType - boxSizes[ iCoord ];
-                iv[ iCoord ] -= deltaMove > decltype(deltaMove)(0) ? 1 : -1;
-            }
-        }
-        mPolymerSystemSorted->host[ miToiNew[i] ].x = r1[0];
-        mPolymerSystemSorted->host[ miToiNew[i] ].y = r1[1];
-        mPolymerSystemSorted->host[ miToiNew[i] ].z = r1[2];
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = iv[0];
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = iv[1];
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = iv[2];
-    }
-    mviPolymerSystemSortedVirtualBox->pushAsync();
-#else
-    for ( auto iSpecies = 0u; iSpecies < nSpecies; ++iSpecies )
-    {
-        auto const nThreads = vnThreadsToTry.at( benchmarkInfo[ iSpecies ].iBestThreadCount );
-        auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
-        /* @todo each species can calculate in parallel */
-        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
-            mPolymerSystemSortedOld         ->gpu + viSubGroupOffsets[ iSpecies ],
-            mPolymerSystemSorted            ->gpu + viSubGroupOffsets[ iSpecies ],
-            mviPolymerSystemSortedVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
-            mnElementsInGroup[ iSpecies ]
-        );
-    }
-    mPolymerSystemSorted            ->pop();
-    mviPolymerSystemSortedVirtualBox->pop();
-#endif
-    if ( mLog.isActive( "Benchmark" ) )
-    {
-        // https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/#disqus_thread
-        cudaEventRecord( tOverflowCheck1, mStream );
-        cudaEventSynchronize( tOverflowCheck1 );  // basically a StreamSynchronize
-        float milliseconds = 0;
-        cudaEventElapsedTime( & milliseconds, tOverflowCheck0, tOverflowCheck1 );
-        std::stringstream sBuffered;
-        sBuffered << "tOverflowCheck = " << milliseconds / 1000. << "s\n";
-        mLog( "Benchmark" ) << sBuffered.str();
-    }
+    #if defined( USE_UINT8_POSITIONS )
+        findAndRemoveOverflows();
+    #endif
 
     /* untangle reordered array so that LeMonADE can use it again */
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )

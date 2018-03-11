@@ -371,6 +371,11 @@ private:
     void initializeSortedMonomerPositions();
     void initializeLattices();
     void checkMonomerReorderMapping();
+    void findAndRemoveOverflows( bool copyToHost = true );
+    /**
+     * sets monomer positions given in mPolymerSystem in mLattice to occupied
+     */
+    void populateLattice();
 
 public:
     void initialize();
@@ -386,10 +391,6 @@ public:
     void setConnectivity      ( T_Id monoidx1, T_Id monoidx2 );
     void setLatticeSize       ( T_BoxSize boxX, T_BoxSize boxY, T_BoxSize boxZ );
 
-    /**
-     * sets monomer positions given in mPolymerSystem in mLattice to occupied
-     */
-    void populateLattice();
     void runSimulationOnGPU( uint32_t nrMCS_per_Call );
 
     /* using T_Coordinate with int64_t throws error as LeMonADE itself is limited to 32 bit positions! */
