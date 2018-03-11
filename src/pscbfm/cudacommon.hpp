@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>                      // NULL, malloc, free, memset
 #include <cstdlib>                      // EXIT_FAILURE, exit
+#include <cstring>                      // memset
 #include <iostream>
 #include <stdexcept>
 #include <sstream>
@@ -1327,6 +1328,8 @@ public:
     typedef T value_type;
 
     T *                host     ;
+    T *                device   ;
+    T *                cpu      ;
     T *                gpu      ;
     size_t       const nElements;
     size_t       const nBytes   ;
@@ -1334,7 +1337,8 @@ public:
     bool         const mAsync   ;
 
     inline MirroredVector()
-     : host( NULL ), gpu( NULL ), nElements( 0 ), nBytes( 0 ), mStream( 0 ), mAsync( false )
+     : host( NULL ), device( NULL ), cpu( NULL ), gpu( NULL ),
+       nElements( 0 ), nBytes( 0 ), mStream( 0 ), mAsync( false )
     {}
 
     inline void malloc()
@@ -1364,6 +1368,8 @@ public:
                 << ", nBytes=" << nBytes << std::endl;
             throw std::runtime_error( msg.str() );
         }
+        cpu    = host;
+        device = gpu ;
     }
 
     inline MirroredVector
@@ -1372,9 +1378,9 @@ public:
         cudaStream_t rStream = 0,
         bool const   rAsync  = false
     )
-     : host( NULL ), gpu( NULL ), nElements( rnElements ),
-       nBytes( rnElements * sizeof(T) ), mStream( rStream ),
-       mAsync( rAsync )
+     : host( NULL ), device( NULL ), cpu( NULL ), gpu( NULL ),
+       nElements( rnElements ), nBytes( rnElements * sizeof(T) ),
+       mStream( rStream ), mAsync( rAsync )
     {
         this->malloc();
     }
@@ -1424,6 +1430,17 @@ public:
             CUDA_ERROR( cudaStreamSynchronize( mStream ) );
     }
     inline void popAsync( void ) const { pop( true ); }
+
+    inline void memset( uint8_t const value = 0, int const rAsync = -1 )
+    {
+        assert( host != NULL );
+        assert( gpu  != NULL );
+        CUDA_ERROR( cudaMemsetAsync( (void*) gpu, value, nBytes, mStream ) );
+        std::memset( (void*) host, value, nBytes );
+        if ( ( rAsync == -1 && ! mAsync ) || ! rAsync )
+            CUDA_ERROR( cudaStreamSynchronize( mStream ) );
+    }
+    inline void memsetAsync( uint8_t const value = 0 ){ memset( value, true ); }
 
     inline void free()
     {

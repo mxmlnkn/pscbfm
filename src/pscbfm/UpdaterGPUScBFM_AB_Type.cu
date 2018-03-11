@@ -1702,7 +1702,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
     mnMonomersPadded = mnAllMonomers + ( nElementsAlignment - 1u ) * mnElementsInGroup.size();
     assert( mPolymerFlags == NULL );
     mPolymerFlags = new MirroredVector< T_Flags >( mnMonomersPadded, mStream );
-    CUDA_ERROR( cudaMemset( mPolymerFlags->gpu, 0, mPolymerFlags->nBytes ) );
+    mPolymerFlags->memsetAsync(0); // can do async as it is next needed in runSimulationOnGPU
 
     /* calculate offsets to each aligned subgroup vector */
     viSubGroupOffsets.resize( mnElementsInGroup.size() );
@@ -1899,13 +1899,19 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
 void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
 {
     /* sort groups into new array and save index mappings */
-    assert( mPolymerSystemSorted == NULL );
-    mPolymerSystemSorted = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
+    assert( mPolymerSystemSorted       == NULL );
+    assert( mPolymerSystemSortedOld    == NULL );
+    assert( mviPolymerSystemVirtualBox == NULL );
+    mPolymerSystemSorted             = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
+    mPolymerSystemSortedOld          = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
+    mviPolymerSystemSortedVirtualBox = new MirroredVector< T_Coordinates      >( mnMonomersPadded, mStream );
     #ifndef NDEBUG
-        std::memset( mPolymerSystemSorted->host, 0, mPolymerSystemSorted->nBytes );
+        mPolymerSystemSorted            ->memset( 0 );
+        mPolymerSystemSortedOld         ->memset( 0 );
+        mviPolymerSystemSortedVirtualBox->memset( 0 );
     #endif
 
-    mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions] sort mPolymerSystem -> mPolymerSystemSorted ...\n";
+    mLog( "Info" ) << "[" << __FILENAME__ << "::initializeSortedMonomerPositions] sort mPolymerSystem -> mPolymerSystemSorted ...\n";
     for ( size_t i = 0u; i < mnAllMonomers; ++i )
     {
         if ( i < 20 )
@@ -1935,7 +1941,7 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
 
     mLatticeOut = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
     mLatticeTmp = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
-    CUDA_ERROR( cudaMemsetAsync( mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream ) );
+    mLatticeTmp->memsetAsync(0); // async as it is next needed in runSimulationOnGPU
     /* populate latticeOut with monomers from mPolymerSystem */
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
     for ( T_Id iMonomer = 0; iMonomer < mnAllMonomers; ++iMonomer )
@@ -2583,8 +2589,15 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         cudaEventRecord( tGpu0, mStream );
     }
 
+    cudaEvent_t tOverflowCheck0, tOverflowCheck1;
+    if ( mLog.isActive( "Benchmark" ) )
+    {
+        cudaEventCreate( &tOverflowCheck0 );
+        cudaEventCreate( &tOverflowCheck1 );
+    }
+
     /* run simulation */
-    for ( uint32_t iStep = 1u; iStep <= nMonteCarloSteps; ++iStep )
+    for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep )
     {
         /* one Monte-Carlo step:
          *  - tries to move on average all particles one time
@@ -2857,20 +2870,27 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         }
     }
 
+    #if 0 && ! defined( DO_OVERFLOW_CHECK_ON_HOST )
+    for ( auto iSpecies = 0u; iSpecies < nSpecies; ++iSpecies )
+    {
+        auto const nThreads = vnThreadsToTry.at( benchmarkInfo[ iSpecies ].iBestThreadCount );
+        auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
+        /* @todo each species can calculate in parallel */
+        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+            mPolymerSystemSortedOld   ->gpu + viSubGroupOffsets[ iSpecies ],
+            mPolymerSystemSorted      ->gpu + viSubGroupOffsets[ iSpecies ],
+            mviPolymerSystemVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
+            mnElementsInGroup[ iSpecies ]
+        );
+    }
+    #endif
+
     /* copy into mPolymerSystem and drop the property tag while doing so.
      * would be easier and probably more efficient if mPolymerSystem->gpu/host
      * would be a struct of arrays instead of an array of structs !!! */
-    mPolymerSystemSorted->pop( false ); // sync
-
-    if ( mLog.isActive( "Benchmark" ) )
-    {
-        std::clock_t const t1 = std::clock();
-        double const dt = float(t1-t0) / CLOCKS_PER_SEC;
-        mLog( "Benchmark" )
-        << "run time (GPU): " << nMonteCarloSteps << "\n"
-        << "mcs = " << nMonteCarloSteps  << "  speed [performed monomer try and move/s] = MCS*N/t: "
-        << nMonteCarloSteps * ( mnAllMonomers / dt )  << "     runtime[s]:" << dt << "\n";
-    }
+    mPolymerSystemSorted            ->pop();
+    mviPolymerSystemSortedVirtualBox->pop();
+    CUDA_ERROR( cudaStreamSynchronize( mStream ) );
 
     /* untangle reordered array so that LeMonADE can use it again */
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
@@ -2932,6 +2952,16 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
+
+    if ( mLog.isActive( "Benchmark" ) )
+    {
+        std::clock_t const t1 = std::clock();
+        double const dt = float(t1-t0) / CLOCKS_PER_SEC;
+        mLog( "Benchmark" )
+        << "run time (GPU): " << nMonteCarloSteps << "\n"
+        << "mcs = " << nMonteCarloSteps  << "  speed [performed monomer try and move/s] = MCS*N/t: "
+        << nMonteCarloSteps * ( mnAllMonomers / dt )  << "     runtime[s]:" << dt << "\n";
+    }
 }
 
 /**
