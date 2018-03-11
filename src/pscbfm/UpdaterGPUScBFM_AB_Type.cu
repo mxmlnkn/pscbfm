@@ -1930,10 +1930,6 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
         mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
 
-        mviPolymerSystemVirtualBox.at( 4*i+0 ) = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-        mviPolymerSystemVirtualBox.at( 4*i+1 ) = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-        mviPolymerSystemVirtualBox.at( 4*i+2 ) = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
-
         auto const pTarget  = &mPolymerSystemSorted            ->host[ miToiNew[i] ];
         auto const pTarget2 = &mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
         if ( ! ( ( (T_Coordinate) pTarget->x + (T_Coordinate) pTarget2->x * (T_Coordinate) mBoxX == x ) &&
@@ -2233,7 +2229,6 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( T_Id const rnAllMonomers )
         mLog( "Error" ) << msg.str();
         throw std::runtime_error( msg.str() );
     }
-    mviPolymerSystemVirtualBox.resize( mnAllMonomers*4 );
     mPolymerSystem            .resize( mnAllMonomers*4 );
     mNeighbors                .resize( mnAllMonomers   );
     std::memset( &mNeighbors[0], 0, mNeighbors.size() * sizeof( mNeighbors[0] ) );
@@ -2310,9 +2305,9 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     mPolymerSystem.at( 4*i+2 ) = z;
 }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+0 ) * mBoxX + mPolymerSystem.at( 4*i+0 ); }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+1 ) * mBoxY + mPolymerSystem.at( 4*i+1 ); }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mviPolymerSystemVirtualBox.at( 4*i+2 ) * mBoxZ + mPolymerSystem.at( 4*i+2 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX + mPolymerSystem.at( 4*i+0 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY + mPolymerSystem.at( 4*i+1 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ + mPolymerSystem.at( 4*i+2 ); }
 
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
@@ -2981,7 +2976,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                         << "\n";
                 }
                 r1[ iCoord ] -= boxSizeCudaType - boxSizes[ iCoord ];
-                mviPolymerSystemVirtualBox[ 4*i+iCoord ] -= deltaMove > decltype(deltaMove)(0) ? 1 : -1;
+                iv[ iCoord ] -= deltaMove > decltype(deltaMove)(0) ? 1 : -1;
             }
         }
         mPolymerSystemSorted->host[ miToiNew[i] ].x = r1[0];
@@ -2990,10 +2985,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = iv[0];
         mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = iv[1];
         mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = iv[2];
-        //mviPolymerSystemVirtualBox.at( 4*i+0 ) = iv[0];
-        //mviPolymerSystemVirtualBox.at( 4*i+1 ) = iv[1];
-        //mviPolymerSystemVirtualBox.at( 4*i+2 ) = iv[2];
     }
+    mviPolymerSystemSortedVirtualBox->pushAsync();
 
     checkSystem(); // no-op if "Check"-level deactivated
 
