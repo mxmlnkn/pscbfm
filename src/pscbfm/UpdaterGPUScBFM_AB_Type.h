@@ -180,7 +180,8 @@ private:
      * Then after 8 usages we can call one cudaMemset for all, possibly making
      * 8 times better use of parallelism on the GPU!
      */
-    cudaTextureObject_t mvtLatticeTmp[ CHAR_BIT ];
+    static auto constexpr mnLatticeTmpBuffers = 8u;
+    std::vector< cudaTextureObject_t > mvtLatticeTmp;
 
     /* copy into mPolymerSystem and drop the property tag while doing so.
      * would be easier and probably more efficient if mPolymerSystem_device/host

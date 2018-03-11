@@ -1516,6 +1516,7 @@ public:
          */
         mResDesc.resType = cudaResourceTypeLinear;
         /**
+         * this might be used for interpolation ?!
          * enum cudaChannelFormatKind
          *   cudaChannelFormatKindSigned   = 0
          *   cudaChannelFormatKindUnsigned = 1
@@ -1523,7 +1524,7 @@ public:
          *   cudaChannelFormatKindNone     = 3
          */
         mResDesc.res.linear.desc.f      = cudaChannelFormatKindUnsigned;
-        mResDesc.res.linear.desc.x      = sizeof(T) * 8; // bits per channel
+        mResDesc.res.linear.desc.x      = sizeof(T) * CHAR_BIT; // bits per channel
         mResDesc.res.linear.devPtr      = this->gpu;
         mResDesc.res.linear.sizeInBytes = this->nBytes;
 

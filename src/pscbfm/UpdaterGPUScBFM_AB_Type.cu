@@ -19,7 +19,7 @@
 #endif
 //#define USE_DOUBLE_BUFFERED_TMP_LATTICE
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
-#   define USE_EIGHTFOLD_BUFFERED_TMP_LATTICE
+#   define USE_NBUFFERED_TMP_LATTICE
 #endif
 
 
@@ -1979,8 +1979,15 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
         throw std::runtime_error( msg.str() );
     }
 
+    size_t nBytesLatticeTmp = mBoxX * mBoxY * mBoxZ / sizeof( T_Lattice );
+    #if defined( USE_BIT_PACKING_TMP_LATTICE )
+        nBytesLatticeTmp /= CHAR_BIT;
+    #endif
+    #if defined( USE_NBUFFERED_TMP_LATTICE )
+        nBytesLatticeTmp *= mnLatticeTmpBuffers;
+    #endif
     mLatticeOut  = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
-    mLatticeTmp  = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
+    mLatticeTmp  = new MirroredTexture< T_Lattice >( nBytesLatticeTmp     , mStream );
     mLatticeTmp2 = new MirroredTexture< T_Lattice >( mBoxX * mBoxY * mBoxZ, mStream );
     mLatticeTmp ->memsetAsync(0); // async as it is next needed in runSimulationOnGPU
     mLatticeTmp2->memsetAsync(0);
@@ -2001,7 +2008,34 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
         << "=> " << 100. * mnAllMonomers / ( mBoxX * mBoxY * mBoxZ ) << "%\n"
         << "Note: densest packing is: 25% -> in this case it might be more reasonable to actually iterate over the spaces where particles can move to, keeping track of them instead of iterating over the particles\n";
 
-    #if defined( USE_EIGHTFOLD_BUFFERED_TMP_LATTICE )
+    #if defined( USE_NBUFFERED_TMP_LATTICE )
+        /**
+         * Addresses must be aligned to 32=2*4*4 byte boundaries
+         * @see https://devtalk.nvidia.com/default/topic/975906/cuda-runtime-api-error-74-misaligned-address/?offset=5
+         * Currently the code does not bother with padding the tmp lattice
+         * buffers assuming that the box is large enough to automatically
+         * lead to the correct alignment. This also assumes the box size to be
+         * of power 2
+         */
+        if ( mBoxX * mBoxY * mBoxZ < 32 )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::initializeLattices] [Error] The total cells in the box " << mBoxX * mBoxY * mBoxZ << " is smaller than 32. This is not allowed (yet) with USE_NBUFFERED_TMP_LATTICE turned as it would neccessitate additional padding between the buffers. Please undefine USE_NBUFFERED_TMP_LATTICE in the source code or increase the box size!\n";
+            mLog( "Error" ) << msg.str();
+            throw std::runtime_error( msg.str() );
+        }
+        /**
+         * "CUDA C Programming Guide 5.0", p73 says "Any address of a variable residing in global memory or returned by one of the memory allocation routines from the driver or runtime API is always aligned to at least 256 bytes"
+         * @see https://stackoverflow.com/questions/14082964/cuda-alignment-256bytes-seriously
+         */
+        else if ( mBoxX * mBoxY * mBoxZ < 256 )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::initializeLattices] [Warning] The total cells in the box " << mBoxX * mBoxY * mBoxZ << " is smaller than 256. This might lead to performance loss. Try undefining USE_NBUFFERED_TMP_LATTICE in the source code or increase the box size.\n";
+            mLog( "Warning" ) << msg.str();
+        }
+
+        mvtLatticeTmp.resize( mnLatticeTmpBuffers );
         cudaResourceDesc mResDesc;
         cudaTextureDesc  mTexDesc;
         std::memset( &mResDesc, 0, sizeof( mResDesc ) );
@@ -2010,16 +2044,19 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
         mResDesc.res.linear.desc.x = sizeof( mLatticeTmp->gpu[0] ) * CHAR_BIT; // bits per channel
         std::memset( &mTexDesc, 0, sizeof( mTexDesc ) );
         mTexDesc.readMode = cudaReadModeElementType;
-        for ( auto i = 0u; i < CHAR_BIT; ++i )
+        for ( auto i = 0u; i < mnLatticeTmpBuffers; ++i )
         {
+            mResDesc.res.linear.sizeInBytes = mBoxX * mBoxY * mBoxZ * sizeof( mLatticeTmp->gpu[0] );
+            #if defined( USE_BIT_PACKING_TMP_LATTICE )
+                mResDesc.res.linear.sizeInBytes /= CHAR_BIT;
+            #endif
+            mResDesc.res.linear.devPtr = (void*) mLatticeTmp->gpu + i * mResDesc.res.linear.sizeInBytes;
             mLog( "Info" )
                 << "Bind texture for " << i << "-th temporary lattice buffer "
-                << "to mLatticeTmp->gpu + " << ( i * mLatticeTmp->nBytes / CHAR_BIT )
+                << "to mLatticeTmp->gpu + " << ( i * mResDesc.res.linear.sizeInBytes )
                 << "\n";
-            mResDesc.res.linear.sizeInBytes = mLatticeTmp->nBytes / CHAR_BIT;
-            mResDesc.res.linear.devPtr      = mLatticeTmp->gpu + i * mLatticeTmp->nBytes / CHAR_BIT;
             /* the last three arguments are pointers to constants! */
-            cudaCreateTextureObject( &mvtLatticeTmp[i], &mResDesc, &mTexDesc, NULL );
+            cudaCreateTextureObject( &mvtLatticeTmp.at(i), &mResDesc, &mTexDesc, NULL );
         }
     #endif
 }
@@ -2769,10 +2806,15 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
          *  - each particle could be touched, not just one group */
         for ( uint32_t iSubStep = 0; iSubStep < nSpecies; ++iSubStep )
         {
-            #if defined( USE_EIGHTFOLD_BUFFERED_TMP_LATTICE )
+            #if defined( USE_NBUFFERED_TMP_LATTICE )
                 auto const iStepTotal = iStep * nSpecies + iSubStep;
-                auto const iOffsetLatticeTmp = ( iStepTotal % CHAR_BIT ) * ( mLatticeTmp->nBytes / CHAR_BIT );
-                auto const texLatticeTmp = mvtLatticeTmp[ iStepTotal % CHAR_BIT ];
+                auto const iOffsetLatticeTmp = ( iStepTotal % mnLatticeTmpBuffers )
+                    * ( mBoxX * mBoxY * mBoxZ * sizeof( mLatticeTmp->gpu[0] )
+                    #if defined( USE_BIT_PACKING_TMP_LATTICE )
+                        / CHAR_BIT
+                    #endif
+                );
+                auto const texLatticeTmp = mvtLatticeTmp[ iStepTotal % mnLatticeTmpBuffers ];
             #else
                 auto const iOffsetLatticeTmp = 0u;
                 auto const texLatticeTmp = mLatticeTmp->texture;
@@ -2863,12 +2905,15 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             if ( useCudaMemset )
             {
-                #if defined( USE_EIGHTFOLD_BUFFERED_TMP_LATTICE )
+                #if defined( USE_NBUFFERED_TMP_LATTICE )
                     /* we only need to delete when buffers will wrap around and
                      * on the last loop, so that on next runSimulationOnGPU
                      * call mLatticeTmp is clean */
-                    if ( iStepTotal % 8 == 0 || ( iStep == nMonteCarloSteps-1 && iSubStep == nSpecies-1 ) )
+                    if ( ( iStepTotal % mnLatticeTmpBuffers == 0 ) ||
+                         ( iStep == nMonteCarloSteps-1 && iSubStep == nSpecies-1 ) )
+                    {
                         cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, mLatticeTmp->nBytes, mStream );
+                    }
                 #elif defined( USE_THRUST_FILL )
                     thrust::fill( thrust::system::cuda::par, (uint64_t*)  mLatticeTmp->gpu,
                                   (uint64_t*)( mLatticeTmp->gpu + mLatticeTmp->nElements ), 0 );
@@ -2891,7 +2936,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                         #endif
                         std::swap( mLatticeTmp, mLatticeTmp2 );
                     #else
-                        cudaMemsetAsync( (void*) mLatticeTmp->gpu, 0, nBytesToDelete, mStream );
+                        mLatticeTmp->memsetAsync(0);
                     #endif
                 #endif
             }
@@ -3055,7 +3100,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     {
         mLatticeTmp->pop( false ); // sync
         size_t nOccupied = 0;
-        for ( size_t i = 0u; i < mBoxX * mBoxY * mBoxZ; ++i )
+        for ( size_t i = 0u; i < mLatticeTmp->nElements; ++i )
             nOccupied += mLatticeTmp->host[i] != 0;
         if ( nOccupied != 0 )
         {
