@@ -1912,19 +1912,58 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
     #endif
 
     mLog( "Info" ) << "[" << __FILENAME__ << "::initializeSortedMonomerPositions] sort mPolymerSystem -> mPolymerSystemSorted ...\n";
-    for ( size_t i = 0u; i < mnAllMonomers; ++i )
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
         if ( i < 20 )
             mLog( "Info" ) << "Write " << i << " to " << this->miToiNew[i] << "\n";
-        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
-        pTarget->x = mPolymerSystem[ 4*i+0 ];
-        pTarget->y = mPolymerSystem[ 4*i+1 ];
-        pTarget->z = mPolymerSystem[ 4*i+2 ];
+
+        auto const x = mPolymerSystem.at( 4*i+0 );
+        auto const y = mPolymerSystem.at( 4*i+1 );
+        auto const z = mPolymerSystem.at( 4*i+2 );
+
+        auto const pTarget  = &mPolymerSystemSorted            ->host[ miToiNew[i] ];
+        auto const pTarget2 = &mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
+
+        mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
+        mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
+        mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
+
+        pTarget->x = x & mBoxXM1;
+        pTarget->y = y & mBoxYM1;
+        pTarget->z = z & mBoxZM1;
         pTarget->w = mNeighbors[i].size;
-        if ( pTarget->x != mPolymerSystem[ 4*i+0 ] )
-            std::cout << "!!! x=" << pTarget->x << " != " << mPolymerSystem[ 4*i+0 ] << "\n";
+
+        pTarget2->x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+        pTarget2->y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+        pTarget2->z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+
+        mviPolymerSystemVirtualBox.at( 4*i+0 ) = pTarget2->x;
+        mviPolymerSystemVirtualBox.at( 4*i+1 ) = pTarget2->y;
+        mviPolymerSystemVirtualBox.at( 4*i+2 ) = pTarget2->z;
+
+        if ( ! ( ( (T_Coordinate) pTarget->x + (T_Coordinate) pTarget2->x * (T_Coordinate) mBoxX == x ) &&
+                 ( (T_Coordinate) pTarget->y + (T_Coordinate) pTarget2->y * (T_Coordinate) mBoxY == y ) &&
+                 ( (T_Coordinate) pTarget->z + (T_Coordinate) pTarget2->z * (T_Coordinate) mBoxZ == z )
+        ) )
+        {
+            std::stringstream msg;
+            msg << "[" << __FILENAME__ << "::initializeSortedMonomerPositions] "
+                << "Error while trying to compress the globale positions into box size modulo and number of virtual box the monomer resides in. Virtual box number "
+                << "(" << pTarget2->x << "," << pTarget2->y << "," << pTarget2->z << ")"
+                << ", wrapped position: "
+                << "(" << pTarget->x << "," << pTarget->y << "," << pTarget->z << ")"
+                << " => reconstructed global position ("
+                << pTarget->x + pTarget2->x * mBoxX << ","
+                << pTarget->y + pTarget2->y * mBoxY << ","
+                << pTarget->z + pTarget2->z * mBoxZ << ")"
+                << " should be equal to the input position: "
+                << "(" << x << "," << y << "," << z << ")"
+                << std::endl;
+            throw std::runtime_error( msg.str() );
+        }
     }
-    mPolymerSystemSorted->pushAsync();
+    mPolymerSystemSorted            ->pushAsync();
+    mviPolymerSystemSortedVirtualBox->pushAsync();
 }
 
 void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
@@ -2137,19 +2176,6 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
      */
     if ( mStream == 0 )
         CUDA_ERROR( cudaStreamCreate( &mStream ) );
-
-    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
-    {
-        auto const x = mPolymerSystem.at( 4*i+0 );
-        auto const y = mPolymerSystem.at( 4*i+1 );
-        auto const z = mPolymerSystem.at( 4*i+2 );
-        mviPolymerSystemVirtualBox.at( 4*i+0 ) = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-        mviPolymerSystemVirtualBox.at( 4*i+1 ) = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-        mviPolymerSystemVirtualBox.at( 4*i+2 ) = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
-        mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
-        mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
-        mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
-    }
 
     initializeBondTable();
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
