@@ -1503,6 +1503,8 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mPolymerSystemSortedOld          ( NULL ),
    mviPolymerSystemSortedVirtualBox ( NULL ),
    mPolymerFlags                    ( NULL ),
+   miToiNew                         ( NULL ),
+   miNewToi                         ( NULL ),
    mviNewToiSpatial                 ( NULL ),
    mvKeysZOrderLinearIds            ( NULL ),
    mNeighborsSorted                 ( NULL ),
@@ -1560,6 +1562,8 @@ void UpdaterGPUScBFM_AB_Type::destruct()
     deletePointer( mPolymerSystemSortedOld          );
     deletePointer( mviPolymerSystemSortedVirtualBox );
     deletePointer( mPolymerFlags                    );
+    deletePointer( miToiNew                         );
+    deletePointer( miNewToi                         );
     deletePointer( mviNewToiSpatial                 );
     deletePointer( mvKeysZOrderLinearIds            );
     deletePointer( mNeighborsSorted                 );
@@ -1717,8 +1721,16 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
      * all of them */
     /* virtual number of monomers which includes the additional alignment padding */
     mnMonomersPadded = mnAllMonomers + ( nElementsAlignment - 1u ) * mnElementsInGroup.size();
+
+    assert( miToiNew      == NULL );
+    assert( miNewToi      == NULL );
     assert( mPolymerFlags == NULL );
+    miToiNew      = new MirroredVector< T_Id    >( mnAllMonomers, mStream );
+    miNewToi      = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
     mPolymerFlags = new MirroredVector< T_Flags >( mnMonomersPadded, mStream );
+    assert( miToiNew      != NULL );
+    assert( miNewToi      != NULL );
+    assert( mPolymerFlags != NULL );
     mPolymerFlags->memsetAsync(0); // can do async as it is next needed in runSimulationOnGPU
 
     /* calculate offsets to each aligned subgroup vector */
@@ -1732,16 +1744,14 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
     }
 
     /* virtually sort groups into new array and save index mappings */
-    miToiNew.resize( mnAllMonomers );
     auto iSubGroup = mviSubGroupOffsets;   /* stores the next free index for each subgroup */
     for ( size_t i = 0u; i < mnAllMonomers; ++i )
-        miToiNew[i] = iSubGroup[ mGroupIds[i] ]++;
+        miToiNew->host[i] = iSubGroup[ mGroupIds[i] ]++;
 
     /* create convenience reverse mapping */
-    miNewToi.resize( mnMonomersPadded );
-    std::fill( miNewToi.begin(), miNewToi.end(), UINT32_MAX );
+    std::fill( miNewToi->host, miNewToi->host + miNewToi->nElements, UINT32_MAX );
     for ( size_t iOld = 0u; iOld < mnAllMonomers; ++iOld )
-        miNewToi[ miToiNew[ iOld ] ] = iOld;
+        miNewToi->host[ miToiNew->host[ iOld ] ] = iOld;
 
     if ( mLog.isActive( "Info" ) )
     {
@@ -1775,7 +1785,7 @@ __global__ void kernelCalcIDs
     {
     for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
     {
-        vKeysZOrderLinearIds.at( miToiNew.at( iOld ) ) = linearizeBoxVectorIndex(
+        vKeysZOrderLinearIds.at( miToiNew->host[ iOld ] ) = linearizeBoxVectorIndex(
             mPolymerSystem->host[ iOld ].x,
             mPolymerSystem->host[ iOld ].y,
             mPolymerSystem->host[ iOld ].z
@@ -1800,26 +1810,26 @@ __global__ void kernelApplyMapping
 
     /* apply sorting for neighbor info, see initializeSortedNeighbors */
     size_t iSpecies = 0u;
-    for ( size_t i = 0u; i < miNewToi.size(); ++i )
+    for ( size_t i = 0u; i < miNewToi->nElements; ++i )
     {
         if ( iSpecies+1 < mviSubGroupOffsets.size() &&
              i >= mviSubGroupOffsets[ iSpecies+1 ] )
         {
             ++iSpecies;
         }
-        if ( miNewToi[i] >= mnAllMonomers )
+        if ( miNewToi->host[i] >= mnAllMonomers )
             continue;
-        mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi[i] ].size;
+        mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi->host[i] ].size;
         auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-        for ( size_t j = 0u; j < mNeighbors[  miNewToi[i] ].size; ++j )
+        for ( size_t j = 0u; j < mNeighbors[  miNewToi->host[i] ].size; ++j )
         {
-            mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ];
+            mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ];
         }
     }
     /* apply sorting to the total map, just like function composition */
-    std::vector< T_Id > iNewToiComposition( miNewToi.size(), UINT32_MAX );
+    std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
     for ( T_Id iNew = 0u; iNew < mviNewToiSpatial.size() ; ++iNew )
-        iNewToiComposition.at( iNew ) = miNewToi.at( mviNewToiSpatial.at( iNew ) );
+        iNewToiComposition.at( iNew ) = miNewToi->host[ mviNewToiSpatial.at( iNew ] );
     miNewToi = iNewToiComposition;
 #endif
 }
@@ -1904,10 +1914,10 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     /* untangle reordered array so that LeMonADE can use it again */
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
-        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
-        mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
-        mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
-        mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
+        auto const pTarget = mPolymerSystemSorted->host + miToiNew->host[i];
+        mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x * mBoxX;
+        mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y * mBoxY;
+        mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z * mBoxZ;
         mPolymerSystem->host[i].w = pTarget->w;
     }
     #endif
@@ -1917,17 +1927,17 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         size_t iSpecies = 0u;
         /* iterate over sorted instead of unsorted array so that calculating
          * the current species we are working on is easier */
-        for ( size_t i = 0u; i < miNewToi.size(); ++i )
+        for ( size_t i = 0u; i < miNewToi->nElements; ++i )
         {
             if ( iSpecies+1 < mviSubGroupOffsets.size() && i >= mviSubGroupOffsets[ iSpecies+1 ] )
                 ++iSpecies;
-            if ( miNewToi[i] >= mnAllMonomers )
+            if ( miNewToi->host[i] >= mnAllMonomers )
                 continue;
-            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi[i] ].size;
+            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi->host[i] ].size;
             auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-            for ( size_t j = 0u; j < mNeighbors[  miNewToi[i] ].size; ++j )
+            for ( size_t j = 0u; j < mNeighbors[  miNewToi->host[i] ].size; ++j )
             {
-                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ];
+                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ];
             }
         }
     }
@@ -1941,14 +1951,14 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         auto const y = mPolymerSystem->host[i].y;
         auto const z = mPolymerSystem->host[i].z;
 
-        mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
-        mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
-        mPolymerSystemSorted->host[ miToiNew[i] ].z = z & mBoxZM1;
-        mPolymerSystemSorted->host[ miToiNew[i] ].w = mNeighbors[i].size;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].x = x & mBoxXM1;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].y = y & mBoxYM1;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].z = z & mBoxZM1;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].w = mNeighbors[i].size;
 
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
     }
     mPolymerSystemSorted            ->pushAsync();
     mviPolymerSystemSortedVirtualBox->pushAsync();
@@ -1973,11 +1983,11 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     }
 
     /* create/update convenience reverse mapping */
-    std::fill( miToiNew.begin(), miToiNew.end(), UINT32_MAX );
-    for ( auto iNew = 0u; iNew < miNewToi.size(); ++iNew )
+    std::fill( miToiNew->host, miToiNew->host + miToiNew->nElements, UINT32_MAX );
+    for ( auto iNew = 0u; iNew < miNewToi->nElements; ++iNew )
     {
-        if ( miNewToi.at( iNew ) != UINT32_MAX )
-            miToiNew.at( miNewToi.at( iNew ) ) = iNew;
+        if ( miNewToi->host[ iNew ] != UINT32_MAX )
+            miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
     }
 #endif
 }
@@ -1991,7 +2001,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
     std::vector< T_Id > vKeysZOrderLinearIds( mnMonomersPadded, UINT32_MAX );
     for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
     {
-        vKeysZOrderLinearIds.at( miToiNew.at( iOld ) ) = linearizeBoxVectorIndex(
+        vKeysZOrderLinearIds.at( miToiNew->host[ iOld ] ) = linearizeBoxVectorIndex(
             mPolymerSystem->host[ iOld ].x,
             mPolymerSystem->host[ iOld ].y,
             mPolymerSystem->host[ iOld ].z
@@ -2008,17 +2018,18 @@ void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
     }
 
     /* apply the newly found sorting into the total map just like function composition */
-    std::vector< T_Id > iNewToiComposition( miNewToi.size(), UINT32_MAX );
+    std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
     for ( T_Id iNew = 0u; iNew < iNewToiSpatial.size() ; ++iNew )
-        iNewToiComposition.at( iNew ) = miNewToi.at( iNewToiSpatial.at( iNew ) );
-    miNewToi = iNewToiComposition;
+        iNewToiComposition.at( iNew ) = miNewToi->host[ iNewToiSpatial.at( iNew ) ];
+    for ( T_Id i = 0u; i < miNewToi->nElements; ++i )
+        miNewToi->host[i] = iNewToiComposition[i];
 
     /* create/update convenience reverse mapping */
-    thrust::fill( thrust::host, miToiNew.begin(), miToiNew.end(), UINT32_MAX );
-    for ( auto iNew = 0u; iNew < miNewToi.size(); ++iNew )
+    thrust::fill( thrust::host, miToiNew->host, miToiNew->host + miToiNew->nElements, UINT32_MAX );
+    for ( auto iNew = 0u; iNew < miNewToi->nElements; ++iNew )
     {
-        if ( miNewToi.at( iNew ) != UINT32_MAX )
-            miToiNew.at( miNewToi.at( iNew ) ) = iNew;
+        if ( miNewToi->host[ iNew ] != UINT32_MAX )
+            miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
     }
 }
 #endif
@@ -2073,29 +2084,29 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
         size_t iSpecies = 0u;
         /* iterate over sorted instead of unsorted array so that calculating
          * the current species we are working on is easier */
-        for ( size_t i = 0u; i < miNewToi.size(); ++i )
+        for ( size_t i = 0u; i < miNewToi->nElements; ++i )
         {
             /* check if we are already working on a new species */
             if ( iSpecies+1 < mviSubGroupOffsets.size() &&
                  i >= mviSubGroupOffsets[ iSpecies+1 ] )
             {
-                mLog( "Info" ) << "Currently at index " << i << "/" << miNewToi.size() << " and crossed offset of species " << iSpecies+1 << " at " << mviSubGroupOffsets[ iSpecies+1 ] << " therefore incrementing iSpecies\n";
+                mLog( "Info" ) << "Currently at index " << i << "/" << miNewToi->nElements << " and crossed offset of species " << iSpecies+1 << " at " << mviSubGroupOffsets[ iSpecies+1 ] << " therefore incrementing iSpecies\n";
                 ++iSpecies;
             }
             /* skip over padded indices */
-            if ( miNewToi[i] >= mnAllMonomers )
+            if ( miNewToi->host[i] >= mnAllMonomers )
                 continue;
             /* actually to the sorting / copying and conversion */
-            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi[i] ].size;
+            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi->host[i] ].size;
             auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-            for ( size_t j = 0u; j < mNeighbors[  miNewToi[i] ].size; ++j )
+            for ( size_t j = 0u; j < mNeighbors[  miNewToi->host[i] ].size; ++j )
             {
                 if ( i < 5 || std::abs( (long long int) i - mviSubGroupOffsets[ mviSubGroupOffsets.size()-1 ] ) < 5 )
                 {
-                    mLog( "Info" ) << "Currently at index " << i << ": Writing into mNeighborsSorted->host[ " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " + " << j << " * " << pitch << " + " << i << "-" << mviSubGroupOffsets[ iSpecies ] << "] the value of old neighbor located at miToiNew[ mNeighbors[ miNewToi[i]=" << miNewToi[i] << " ] = miToiNew[ " << mNeighbors[ miNewToi[i] ].neighborIds[j] << " ] = " << miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ] << " \n";
+                    mLog( "Info" ) << "Currently at index " << i << ": Writing into mNeighborsSorted->host[ " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " + " << j << " * " << pitch << " + " << i << "-" << mviSubGroupOffsets[ iSpecies ] << "] the value of old neighbor located at miToiNew->host[ mNeighbors[ miNewToi->host[i]=" << miNewToi->host[i] << " ] = miToiNew->host[ " << mNeighbors[ miNewToi->host[i] ].neighborIds[j] << " ] = " << miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ] << " \n";
                 }
-                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ];
-                //mNeighborsSorted->host[ miToiNew[i] ].neighborIds[j] = miToiNew[ mNeighbors[i].neighborIds[j] ];
+                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ];
+                //mNeighborsSorted->host[ miToiNew->host[i] ].neighborIds[j] = miToiNew->host[ mNeighbors[i].neighborIds[j] ];
             }
         }
     }
@@ -2158,23 +2169,23 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
         if ( i < 20 )
-            mLog( "Info" ) << "Write " << i << " to " << this->miToiNew[i] << "\n";
+            mLog( "Info" ) << "Write " << i << " to " << this->miToiNew->host[i] << "\n";
 
         auto const x = mPolymerSystem->host[i].x;
         auto const y = mPolymerSystem->host[i].y;
         auto const z = mPolymerSystem->host[i].z;
 
-        mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
-        mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
-        mPolymerSystemSorted->host[ miToiNew[i] ].z = z & mBoxZM1;
-        mPolymerSystemSorted->host[ miToiNew[i] ].w = mNeighbors[i].size;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].x = x & mBoxXM1;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].y = y & mBoxYM1;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].z = z & mBoxZM1;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].w = mNeighbors[i].size;
 
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
 
-        auto const pTarget  = &mPolymerSystemSorted            ->host[ miToiNew[i] ];
-        auto const pTarget2 = &mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
+        auto const pTarget  = &mPolymerSystemSorted            ->host[ miToiNew->host[i] ];
+        auto const pTarget2 = &mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ];
         if ( ! ( ( (T_Coordinate) pTarget->x + (T_Coordinate) pTarget2->x * (T_Coordinate) mBoxX == x ) &&
                  ( (T_Coordinate) pTarget->y + (T_Coordinate) pTarget2->y * (T_Coordinate) mBoxY == y ) &&
                  ( (T_Coordinate) pTarget->z + (T_Coordinate) pTarget2->z * (T_Coordinate) mBoxZ == z )
@@ -2298,36 +2309,36 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
 
 void UpdaterGPUScBFM_AB_Type::checkMonomerReorderMapping( void )
 {
-    if ( miToiNew.size() != mnAllMonomers )
+    if ( miToiNew->nElements != mnAllMonomers )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
             << "miToiNew must have " << mnAllMonomers << " elements "
-            << "(as many as monomers), but it has " << miToiNew.size() << "!";
+            << "(as many as monomers), but it has " << miToiNew->nElements << "!";
         mLog( "Error" ) << msg.str();
         throw std::runtime_error( msg.str() );
     }
 
-    if ( miNewToi.size() != mnMonomersPadded )
+    if ( miNewToi->nElements != mnMonomersPadded )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
             << "miNewToi must have " << mnMonomersPadded << " elements "
-            << "(as many as monomers), but it has " << miNewToi.size() << "!";
+            << "(as many as monomers), but it has " << miNewToi->nElements << "!";
         mLog( "Error" ) << msg.str();
         throw std::runtime_error( msg.str() );
     }
 
-    auto const nMonomers       = miToiNew.size();
-    auto const nMonomersPadded = miNewToi.size();
+    auto const nMonomers       = miToiNew->nElements;
+    auto const nMonomersPadded = miNewToi->nElements;
 
     /* check that the mapping is bijective if we exclude
      * entries equal to UINT32_MAX */
     std::vector< bool > vIsMapped( nMonomers, false );
 
-    for ( size_t iNew = 0u; iNew < miNewToi.size(); ++iNew )
+    for ( size_t iNew = 0u; iNew < miNewToi->nElements; ++iNew )
     {
-        auto const iOld = miNewToi.at( iNew );
+        auto const iOld = miNewToi->host[ iNew ];
 
         if ( iOld == UINT32_MAX )
             continue;
@@ -2370,9 +2381,9 @@ void UpdaterGPUScBFM_AB_Type::checkMonomerReorderMapping( void )
 
     std::vector< bool > vIsMappedTo( nMonomersPadded, false );
 
-    for ( size_t iOld = 0u; iOld < miToiNew.size(); ++iOld )
+    for ( size_t iOld = 0u; iOld < miToiNew->nElements; ++iOld )
     {
-        auto const iNew = miToiNew.at( iOld );
+        auto const iNew = miToiNew->host[ iOld ];
 
         if ( iNew == UINT32_MAX )
             continue;
@@ -2414,36 +2425,36 @@ void UpdaterGPUScBFM_AB_Type::checkMonomerReorderMapping( void )
     }
 
     /* check that it actually is the inverse */
-    for ( size_t iOld = 0u; iOld < miToiNew.size(); ++iOld )
+    for ( size_t iOld = 0u; iOld < miToiNew->nElements; ++iOld )
     {
-        if ( miToiNew.at( iOld ) == UINT32_MAX )
+        if ( miToiNew->host[ iOld ] == UINT32_MAX )
             continue;
 
-        if ( miNewToi.at( miToiNew.at( iOld ) ) != iOld )
+        if ( miNewToi->host[ miToiNew->host[ iOld ] ] != iOld )
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
                 << "Roundtrip iOld -> iNew -> iOld not working for iOld= "
-                << iOld << " -> " << miToiNew.at( iOld ) << " -> "
-                << miNewToi.at( miToiNew.at( iOld ) );
+                << iOld << " -> " << miToiNew->host[ iOld ] << " -> "
+                << miNewToi->host[ miToiNew->host[ iOld ] ];
             mLog( "Error" ) << msg.str();
             throw std::runtime_error( msg.str() );
         }
     }
 
     /* check that it actually is the inverse the other way around */
-    for ( size_t iNew = 0u; iNew < miNewToi.size(); ++iNew )
+    for ( size_t iNew = 0u; iNew < miNewToi->nElements; ++iNew )
     {
-        if ( miNewToi.at( iNew ) == UINT32_MAX )
+        if ( miNewToi->host[ iNew ] == UINT32_MAX )
             continue;
 
-        if ( miToiNew.at( miNewToi.at( iNew ) ) != iNew )
+        if ( miToiNew->host[ miNewToi->host[ iNew ] ] != iNew )
         {
             std::stringstream msg;
             msg << "[" << __FILENAME__ << "::checkMonomerReorderMapping] "
                 << "Roundtrip iNew -> iOld -> iNew not working for iNew= "
-                << iNew << " -> " << miNewToi.at( iNew ) << " -> "
-                << miToiNew.at( miNewToi.at( iNew ) );
+                << iNew << " -> " << miNewToi->host[ iNew ] << " -> "
+                << miToiNew->host[ miNewToi->host[ iNew ] ];
             mLog( "Error" ) << msg.str();
             throw std::runtime_error( msg.str() );
         }
@@ -2696,9 +2707,9 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
     size_t nPrintInfo = 10;
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
-        auto const r0tmp = mPolymerSystemSortedOld         ->host[ miToiNew[i] ];
-        auto const r1tmp = mPolymerSystemSorted            ->host[ miToiNew[i] ];
-        auto const ivtmp = mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
+        auto const r0tmp = mPolymerSystemSortedOld         ->host[ miToiNew->host[i] ];
+        auto const r1tmp = mPolymerSystemSorted            ->host[ miToiNew->host[i] ];
+        auto const ivtmp = mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ];
         T_UCoordinateCuda r0[3] = { r0tmp.x, r0tmp.y, r0tmp.z };
         T_UCoordinateCuda r1[3] = { r1tmp.x, r1tmp.y, r1tmp.z };
         T_Coordinate      iv[3] = { ivtmp.x, ivtmp.y, ivtmp.z };
@@ -2726,12 +2737,12 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
                 iv[ iCoord ] -= deltaMove > decltype(deltaMove)(0) ? 1 : -1;
             }
         }
-        mPolymerSystemSorted->host[ miToiNew[i] ].x = r1[0];
-        mPolymerSystemSorted->host[ miToiNew[i] ].y = r1[1];
-        mPolymerSystemSorted->host[ miToiNew[i] ].z = r1[2];
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = iv[0];
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = iv[1];
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = iv[2];
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].x = r1[0];
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].y = r1[1];
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].z = r1[2];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x = iv[0];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y = iv[1];
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z = iv[2];
     }
     mviPolymerSystemSortedVirtualBox->pushAsync();
 #else
@@ -3361,12 +3372,12 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
     /* untangle reordered array so that LeMonADE can use it again */
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
-        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
+        auto const pTarget = mPolymerSystemSorted->host + miToiNew->host[i];
         if ( i < 10 )
-            mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
-        mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
-        mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
-        mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
+            mLog( "Info" ) << "Copying back " << i << " from " << miToiNew->host[i] << "\n";
+        mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x * mBoxX;
+        mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y * mBoxY;
+        mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z * mBoxZ;
         mPolymerSystem->host[i].w = pTarget->w;
     }
 

@@ -249,8 +249,8 @@ private:
     std::vector< T_Color > mGroupIds; /* for each monomer stores the color / attribute / group ID/tag */
     std::vector< size_t  > mnElementsInGroup;
     std::vector< T_Id    > mviSubGroupOffsets; /* stores offsets (in number of elements not bytes) to each aligned subgroup vector in mPolymerSystemSorted */
-    std::vector   < T_Id > miToiNew; /* for each old monomer stores the new position */
-    std::vector   < T_Id > miNewToi; /* for each new monomer stores the old position */
+    MirroredVector< T_Id > * miToiNew; /* for each old monomer stores the new position */
+    MirroredVector< T_Id > * miNewToi; /* for each new monomer stores the old position */
     MirroredVector< T_Id > * mviNewToiSpatial; /* used for sorting monomers along z-curve on GPU */
     MirroredVector< T_Id > * mvKeysZOrderLinearIds; /* used for sorting monomers along z-curve on GPU */
 
