@@ -1770,6 +1770,9 @@ __global__ void kernelCalcIDs
 )
 {
 #if 0
+    for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+          iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
+    {
     for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
     {
         vKeysZOrderLinearIds.at( miToiNew.at( iOld ) ) = linearizeBoxVectorIndex(
@@ -1790,6 +1793,9 @@ __global__ void kernelApplyMapping
 )
 {
 #if 0
+    for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
+          iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
+    {
     /* apply sorting for polymers, see initializePolymerSystemSorted */
 
     /* apply sorting for neighbor info, see initializeSortedNeighbors */
@@ -1818,6 +1824,31 @@ __global__ void kernelApplyMapping
 #endif
 }
 
+__global__ void kernelUndoPolymerSystemSorting
+(
+    T_UCoordinatesCuda const * const dpPolymerSystemSorted           ,
+    T_Coordinates      const * const dpiPolymerSystemSortedVirtualBox,
+    T_Id               const * const dpiNewToi                       ,
+    T_Coordinates            * const dpPolymerSystem                 ,
+    T_Id                       const nMonomersPadded
+)
+{
+    for ( auto iNew = blockIdx.x * blockDim.x + threadIdx.x;
+          iNew < nMonomersPadded; iNew += gridDim.x * blockDim.x )
+    {
+        auto const iOld = dpiNewToi[ iNew ];
+        if ( iOld == UINT32_MAX )
+            continue;
+        auto const rsmall = dpPolymerSystemSorted[ iNew ];
+        T_Coordinates rSorted = { rsmall.x, rsmall.y, rsmall.z, rsmall.w };
+        auto const nPos = dpiPolymerSystemSortedVirtualBox[ iNew ];
+        rSorted.x += nPos.x * dcBoxX;
+        rSorted.y += nPos.y * dcBoxY;
+        rSorted.z += nPos.z * dcBoxZ;
+        dpPolymerSystem[ iNew ] = rSorted;
+    }
+}
+
 /**
  * this works on mPolymerSystemSorted and resorts the monomers along a
  * z-order curve in order to improve cache hit rates, especially for "slow"
@@ -1836,6 +1867,96 @@ __global__ void kernelApplyMapping
  */
 void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
 {
+    /* because resorting changes the order we have to do the full
+     * overflow checks and also update mPolymerSystemSortedOld ! */
+    #if defined( USE_UINT8_POSITIONS )
+    {
+        auto const nThreads = 128;
+        auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
+        /* the padding values do not change, so we can simply let the threads
+         * calculate them without worries and save the loop over the species */
+        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+            mPolymerSystemSortedOld         ->gpu,
+            mPolymerSystemSorted            ->gpu,
+            mviPolymerSystemSortedVirtualBox->gpu,
+            mnMonomersPadded
+        );
+    }
+    #endif
+#if 1
+    #if 0
+    {
+        auto const nThreads = 128;
+        auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
+        kernelUndoPolymerSystemSorting<<< nBlocks, nThreads, 0, mStream >>>
+        (
+            mPolymerSystemSorted            ->gpu,
+            mviPolymerSystemSortedVirtualBox->gpu,
+            miNewToi                        ->gpu,
+            mPolymerSystem                  ->gpu,
+            nMonomersPadded
+        )
+    }
+    mPolymerSystem.pop();
+    #else
+    mPolymerSystemSorted            ->pop();
+    mviPolymerSystemSortedVirtualBox->pop();
+    /* untangle reordered array so that LeMonADE can use it again */
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+    {
+        auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
+        mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
+        mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
+        mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
+        mPolymerSystem->host[i].w = pTarget->w;
+    }
+    #endif
+
+    initializeSpatialSorting();
+    {
+        size_t iSpecies = 0u;
+        /* iterate over sorted instead of unsorted array so that calculating
+         * the current species we are working on is easier */
+        for ( size_t i = 0u; i < miNewToi.size(); ++i )
+        {
+            if ( iSpecies+1 < mviSubGroupOffsets.size() && i >= mviSubGroupOffsets[ iSpecies+1 ] )
+                ++iSpecies;
+            if ( miNewToi[i] >= mnAllMonomers )
+                continue;
+            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi[i] ].size;
+            auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
+            for ( size_t j = 0u; j < mNeighbors[  miNewToi[i] ].size; ++j )
+            {
+                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ];
+            }
+        }
+    }
+
+    mNeighborsSorted     ->pushAsync();
+    mNeighborsSortedSizes->pushAsync();
+
+    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+    {
+        auto const x = mPolymerSystem->host[i].x;
+        auto const y = mPolymerSystem->host[i].y;
+        auto const z = mPolymerSystem->host[i].z;
+
+        mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
+        mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
+        mPolymerSystemSorted->host[ miToiNew[i] ].z = z & mBoxZM1;
+        mPolymerSystemSorted->host[ miToiNew[i] ].w = mNeighbors[i].size;
+
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+    }
+    mPolymerSystemSorted            ->pushAsync();
+    mviPolymerSystemSortedVirtualBox->pushAsync();
+
+#endif
+    CUDA_ERROR( cudaMemcpy( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice ) );
+
+#if 0
     thrust::sequence( thrust::system::cuda::par, mviNewToiSpatial->gpu, mviNewToiSpatial->gpu + mviNewToiSpatial->nElements );
     auto const nThreads = 128;
     auto const nBlocks  = ceilDiv( mPolymerSystemSorted->nElements, nThreads );
@@ -1858,14 +1979,14 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         if ( miNewToi.at( iNew ) != UINT32_MAX )
             miToiNew.at( miNewToi.at( iNew ) ) = iNew;
     }
+#endif
 }
 
 void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
 {
     /* sort monomers spatially to increase texture cache hit rates for the lattice lookup even more ... ... */
     std::vector< T_Id > iNewToiSpatial( mnMonomersPadded ); /* mapping new (monomers spatially sorted) index to old (species sorted) index */
-    for ( T_Id iNew = 0u; iNew < iNewToiSpatial.size(); ++iNew )
-        iNewToiSpatial.at( iNew ) = iNew;
+    thrust::sequence( thrust::host, iNewToiSpatial.begin(), iNewToiSpatial.end() );
 
     std::vector< T_Id > vKeysZOrderLinearIds( mnMonomersPadded, UINT32_MAX );
     for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
@@ -2853,83 +2974,12 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     /* run simulation */
     for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep )
     {
-        if ( iStep == 0 )
+        if ( iStep % 100 == 0 )
         {
             if ( mLog.isActive( "Benchmark" ) )
                 cudaEventRecord( tSort0, mStream );
 
-            /* because resorting changes the order we have to do the full
-             * overflow checks and also update mPolymerSystemSortedOld ! */
-            #if defined( USE_UINT8_POSITIONS )
-                auto const nThreads = 128;
-                auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
-                /* the padding values do not change, so we can simply let the threads
-                 * calculate them without worries and save the loop over the species */
-                kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSortedOld         ->gpu,
-                    mPolymerSystemSorted            ->gpu,
-                    mviPolymerSystemSortedVirtualBox->gpu,
-                    mnMonomersPadded
-                );
-            #endif
-        #if 1
-            mPolymerSystemSorted            ->pop();
-            mviPolymerSystemSortedVirtualBox->pop();
-            /* untangle reordered array so that LeMonADE can use it again */
-            for ( T_Id i = 0u; i < mnAllMonomers; ++i )
-            {
-                auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
-                if ( i < 10 )
-                    mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
-                mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
-                mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
-                mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
-                mPolymerSystem->host[i].w = pTarget->w;
-            }
-
-            initializeSpatialSorting();
-            {
-                size_t iSpecies = 0u;
-                /* iterate over sorted instead of unsorted array so that calculating
-                 * the current species we are working on is easier */
-                for ( size_t i = 0u; i < miNewToi.size(); ++i )
-                {
-                    if ( iSpecies+1 < mviSubGroupOffsets.size() && i >= mviSubGroupOffsets[ iSpecies+1 ] )
-                        ++iSpecies;
-                    if ( miNewToi[i] >= mnAllMonomers )
-                        continue;
-                    mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi[i] ].size;
-                    auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-                    for ( size_t j = 0u; j < mNeighbors[  miNewToi[i] ].size; ++j )
-                    {
-                        mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ];
-                    }
-                }
-            }
-
-            mNeighborsSorted     ->pushAsync();
-            mNeighborsSortedSizes->pushAsync();
-
-            for ( T_Id i = 0u; i < mnAllMonomers; ++i )
-            {
-                auto const x = mPolymerSystem->host[i].x;
-                auto const y = mPolymerSystem->host[i].y;
-                auto const z = mPolymerSystem->host[i].z;
-
-                mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
-                mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
-                mPolymerSystemSorted->host[ miToiNew[i] ].z = z & mBoxZM1;
-                mPolymerSystemSorted->host[ miToiNew[i] ].w = mNeighbors[i].size;
-
-                mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-                mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-                mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
-            }
-            mPolymerSystemSorted            ->pushAsync();
-            mviPolymerSystemSortedVirtualBox->pushAsync();
-
-        #endif
-            CUDA_ERROR( cudaMemcpy( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice ) );
+            doSpatialSorting();
 
             if ( mLog.isActive( "Benchmark" ) )
             {
