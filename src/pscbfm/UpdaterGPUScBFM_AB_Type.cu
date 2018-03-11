@@ -1844,6 +1844,40 @@ __global__ void kernelUndoPolymerSystemSorting
     }
 }
 
+__global__ void kernelSplitMonomerPositions
+(
+    T_Coordinates const * const dpPolymerSystem                 ,
+    T_Id          const * const dpiNewToi                       ,
+    T_Coordinates       * const dpiPolymerSystemSortedVirtualBox,
+    T_UCoordinatesCuda  * const dpPolymerSystemSorted           ,
+    size_t                const nMonomersPadded
+)
+{
+    for ( auto iNew = blockIdx.x * blockDim.x + threadIdx.x;
+          iNew < nMonomersPadded; iNew += gridDim.x * blockDim.x )
+    {
+        auto const iOld = dpiNewToi[ iNew ];
+        if ( iOld == UINT32_MAX )
+            continue;
+        auto const r = dpPolymerSystem[ iOld ];
+        T_UCoordinatesCuda rlo = {
+            T_UCoordinateCuda( r.x & dcBoxXM1 ),
+            T_UCoordinateCuda( r.y & dcBoxYM1 ),
+            T_UCoordinateCuda( r.z & dcBoxZM1 ),
+            dpPolymerSystemSorted[ iNew ].w
+        };
+        dpPolymerSystemSorted[ iNew ] = rlo;
+        T_Coordinates rhi = {
+            ( r.x - T_Coordinate( rlo.x ) ) / T_Coordinate( dcBoxX ),
+            ( r.y - T_Coordinate( rlo.y ) ) / T_Coordinate( dcBoxY ),
+            ( r.z - T_Coordinate( rlo.z ) ) / T_Coordinate( dcBoxZ ),
+            0
+        };
+        dpiPolymerSystemSortedVirtualBox[ iNew ] = rhi;
+    }
+}
+
+
 struct LinearizeBoxVectorIndexFunctor
 {
     __device__ inline T_Id operator()( T_UCoordinatesCuda const & r ) const
@@ -1936,9 +1970,11 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         if ( miNewToi->host[ iNew ] != UINT32_MAX )
             miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
     }
+    miNewToi->push();
+    miToiNew->push();
 
 
-
+    #if 1
     {
         size_t iSpecies = 0u;
         /* iterate over sorted instead of unsorted array so that calculating
@@ -1957,30 +1993,25 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
             }
         }
     }
-
-    mPolymerSystem       ->pop();
     mNeighborsSorted     ->pushAsync();
     mNeighborsSortedSizes->pushAsync();
+    #else
 
-    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
-    {
-        auto const x = mPolymerSystem->host[i].x;
-        auto const y = mPolymerSystem->host[i].y;
-        auto const z = mPolymerSystem->host[i].z;
+    #endif
 
-        mPolymerSystemSorted->host[ miToiNew->host[i] ].x = x & mBoxXM1;
-        mPolymerSystemSorted->host[ miToiNew->host[i] ].y = y & mBoxYM1;
-        mPolymerSystemSorted->host[ miToiNew->host[i] ].z = z & mBoxZM1;
-        mPolymerSystemSorted->host[ miToiNew->host[i] ].w = mNeighbors[i].size;
+    /* kernelUndoPolymerSystemSorting followed by kernelSplitMonomerPositions
+     * basically just avoids using two temporary arrays for the resorting of
+     * mPolymerSystemSorted and mviPolymerSystemSortedVirtualBox */
 
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-        mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
-    }
-    mPolymerSystemSorted            ->pushAsync();
-    mviPolymerSystemSortedVirtualBox->pushAsync();
+    kernelSplitMonomerPositions<<< nBlocksP, nThreads >>>(
+        mPolymerSystem                  ->gpu,
+        miNewToi                        ->gpu,
+        mviPolymerSystemSortedVirtualBox->gpu,
+        mPolymerSystemSorted            ->gpu,
+        mnMonomersPadded
+    );
 
-    CUDA_ERROR( cudaMemcpy( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice ) );
+    CUDA_ERROR( cudaMemcpyAsync( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice, mStream ) );
 }
 
 void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
