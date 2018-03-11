@@ -2538,8 +2538,8 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 {
     std::clock_t const t0 = std::clock();
 
-    mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
     CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
+    mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
     auto const nSpecies = mnElementsInGroup.size();
     //std::cout << "x=" << x << " -> " << ( x & mBoxXM1 ) << " -> (" << mviPolymerSystemVirtualBox.at( 4*i+0 ) << "," << mPolymerSystem.at( 4*i+0 ) << ")\n";
 
@@ -2982,6 +2982,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mviPolymerSystemVirtualBox[ 4*i+iCoord ] -= deltaMove > decltype(deltaMove)(0) ? 1 : -1;
             }
         }
+        mPolymerSystemSorted->host[ miToiNew[i] ].x = r1[0];
+        mPolymerSystemSorted->host[ miToiNew[i] ].y = r1[1];
+        mPolymerSystemSorted->host[ miToiNew[i] ].z = r1[2];
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
