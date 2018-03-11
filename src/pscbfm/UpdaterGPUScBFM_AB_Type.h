@@ -170,7 +170,6 @@ private:
      * Suggestion: bitpack it to save 8 times memory and possibly make the
      *             the reading faster if it is memory bound ???
      */
-    T_Lattice * mLattice; // being used for checkLattice nothing else ...
     MirroredTexture< T_Lattice > * mLatticeOut, * mLatticeTmp, * mLatticeTmp2;
     /**
      * when using bit packing only 1/8 of mLatticeTmp is used. In order to
@@ -208,7 +207,7 @@ private:
      * populating the lattice with 2x2x2 boxes representing the monomers
      */
     size_t mnAllMonomers;
-    std::vector< T_Coordinate > mPolymerSystem;
+    MirroredVector< T_Coordinates > * mPolymerSystem;
     /**
      * This is mPolymerSystem sorted by species and also made struct of array
      * in order to split neighbors size off into extra array, thereby also
@@ -385,10 +384,6 @@ private:
     void initializeLattices();
     void checkMonomerReorderMapping();
     void findAndRemoveOverflows( bool copyToHost = true );
-    /**
-     * sets monomer positions given in mPolymerSystem in mLattice to occupied
-     */
-    void populateLattice();
     void doCopyBack();
 
 public:

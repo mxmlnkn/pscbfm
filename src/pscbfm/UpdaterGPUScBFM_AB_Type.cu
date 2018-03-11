@@ -127,14 +127,14 @@ __device__ __constant__ T_CoordinateCuda DZTableIntCUDA_d[6];
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
  * the same constant */
-__device__ __constant__ uint32_t dcBoxX     ;  // mLattice size in X
-__device__ __constant__ uint32_t dcBoxY     ;  // mLattice size in Y
-__device__ __constant__ uint32_t dcBoxZ     ;  // mLattice size in Z
-__device__ __constant__ uint32_t dcBoxXM1   ;  // mLattice size in X-1
-__device__ __constant__ uint32_t dcBoxYM1   ;  // mLattice size in Y-1
-__device__ __constant__ uint32_t dcBoxZM1   ;  // mLattice size in Z-1
-__device__ __constant__ uint32_t dcBoxXLog2 ;  // mLattice shift in X
-__device__ __constant__ uint32_t dcBoxXYLog2;  // mLattice shift in X*Y
+__device__ __constant__ uint32_t dcBoxX     ;  // lattice size in X
+__device__ __constant__ uint32_t dcBoxY     ;  // lattice size in Y
+__device__ __constant__ uint32_t dcBoxZ     ;  // lattice size in Z
+__device__ __constant__ uint32_t dcBoxXM1   ;  // lattice size in X-1
+__device__ __constant__ uint32_t dcBoxYM1   ;  // lattice size in Y-1
+__device__ __constant__ uint32_t dcBoxZM1   ;  // lattice size in Z-1
+__device__ __constant__ uint32_t dcBoxXLog2 ;  // lattice shift in X
+__device__ __constant__ uint32_t dcBoxXYLog2;  // lattice shift in X*Y
 
 
 /* Since CUDA 5.5 (~2014) there do exist texture objects which are much
@@ -1493,12 +1493,12 @@ UpdaterGPUScBFM_AB_Type::T_Id UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
 
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
  : mStream                          ( 0    ),
-   mLattice                         ( NULL ),
    mLatticeOut                      ( NULL ),
    mLatticeTmp                      ( NULL ),
    mLatticeTmp2                     ( NULL ),
    mnAllMonomers                    ( 0    ),
    mnMonomersPadded                 ( 0    ),
+   mPolymerSystem                   ( NULL ),
    mPolymerSystemSorted             ( NULL ),
    mPolymerSystemSortedOld          ( NULL ),
    mviPolymerSystemSortedVirtualBox ( NULL ),
@@ -1552,10 +1552,10 @@ inline void deletePointer( T * & p )
  */
 void UpdaterGPUScBFM_AB_Type::destruct()
 {
-    if ( mLattice != NULL ){ delete[] mLattice; mLattice = NULL; }
     deletePointer( mLatticeOut                      );
     deletePointer( mLatticeTmp                      );
     deletePointer( mLatticeTmp2                     );
+    deletePointer( mPolymerSystem                   );
     deletePointer( mPolymerSystemSorted             );
     deletePointer( mPolymerSystemSortedOld          );
     deletePointer( mviPolymerSystemSortedVirtualBox );
@@ -1773,9 +1773,9 @@ __global__ void kernelCalcIDs
     for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
     {
         vKeysZOrderLinearIds.at( miToiNew.at( iOld ) ) = linearizeBoxVectorIndex(
-            mPolymerSystem.at( 4 * iOld + 0 ),
-            mPolymerSystem.at( 4 * iOld + 1 ),
-            mPolymerSystem.at( 4 * iOld + 2 )
+            mPolymerSystem->host[ iOld ].x,
+            mPolymerSystem->host[ iOld ].y,
+            mPolymerSystem->host[ iOld ].z
         );
     }
 #endif
@@ -1871,9 +1871,9 @@ void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
     for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
     {
         vKeysZOrderLinearIds.at( miToiNew.at( iOld ) ) = linearizeBoxVectorIndex(
-            mPolymerSystem.at( 4 * iOld + 0 ),
-            mPolymerSystem.at( 4 * iOld + 1 ),
-            mPolymerSystem.at( 4 * iOld + 2 )
+            mPolymerSystem->host[ iOld ].x,
+            mPolymerSystem->host[ iOld ].y,
+            mPolymerSystem->host[ iOld ].z
         );
     }
     /* sort per sublists (each species) by key, not the whole list */
@@ -2039,9 +2039,9 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         if ( i < 20 )
             mLog( "Info" ) << "Write " << i << " to " << this->miToiNew[i] << "\n";
 
-        auto const x = mPolymerSystem.at( 4*i+0 );
-        auto const y = mPolymerSystem.at( 4*i+1 );
-        auto const z = mPolymerSystem.at( 4*i+2 );
+        auto const x = mPolymerSystem->host[i].x;
+        auto const y = mPolymerSystem->host[i].y;
+        auto const z = mPolymerSystem->host[i].z;
 
         mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
         mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
@@ -2107,9 +2107,11 @@ void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
     std::memset( mLatticeOut->host, 0, mLatticeOut->nBytes );
     for ( T_Id iMonomer = 0; iMonomer < mnAllMonomers; ++iMonomer )
     {
-        mLatticeOut->host[ linearizeBoxVectorIndex( mPolymerSystem[ 4 * iMonomer + 0 ],
-                                                    mPolymerSystem[ 4 * iMonomer + 1 ],
-                                                    mPolymerSystem[ 4 * iMonomer + 2 ] ) ] = 1;
+        mLatticeOut->host[ linearizeBoxVectorIndex(
+            mPolymerSystem->host[ iMonomer ].x,
+            mPolymerSystem->host[ iMonomer ].y,
+            mPolymerSystem->host[ iMonomer ].z
+        ) ] = 1;
     }
     mLatticeOut->pushAsync();
 
@@ -2390,22 +2392,18 @@ void UpdaterGPUScBFM_AB_Type::copyBondSet
 
 void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( T_Id const rnAllMonomers )
 {
-    if ( mnAllMonomers != 0 ||
-         mPolymerSystemSorted != NULL || mNeighborsSorted != NULL )
+    if ( mnAllMonomers != 0 )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::setNrOfAllMonomers] "
-            << "Number of Monomers already set to " << mnAllMonomers << "!\n"
-            << "Or some arrays were already allocated "
-            << "mPolymerSystemSorted" << (void*) mPolymerSystemSorted
-            << ", mNeighborsSorted" << (void*) mNeighborsSorted << ")\n";
+            << "Number of Monomers already set to " << mnAllMonomers << "!\n";
         throw std::runtime_error( msg.str() );
     }
 
     mnAllMonomers = rnAllMonomers;
     mAttributeSystem.resize( mnAllMonomers   );
-    mPolymerSystem  .resize( mnAllMonomers*4 );
     mNeighbors      .resize( mnAllMonomers   );
+    mPolymerSystem = new MirroredVector< T_Coordinates >( mnAllMonomers );
     std::memset( &mNeighbors[0], 0, mNeighbors.size() * sizeof( mNeighbors[0] ) );
 }
 
@@ -2450,9 +2448,9 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
     //if ( ! ( 0 <= x && (T_BoxSize) x < mBoxX ) )
     //    std::cout << i << ": (" << x << "," << y << "," << z << ")\n";
     /* can I apply periodic modularity here to allow the full range ??? */
-    if ( ! inRange< decltype( mPolymerSystem[0] ) >(x) ||
-         ! inRange< decltype( mPolymerSystem[0] ) >(y) ||
-         ! inRange< decltype( mPolymerSystem[0] ) >(z)    )
+    if ( ! inRange< decltype( mPolymerSystem->host[0].x ) >(x) ||
+         ! inRange< decltype( mPolymerSystem->host[0].y ) >(y) ||
+         ! inRange< decltype( mPolymerSystem->host[0].z ) >(z)    )
     {
         std::stringstream msg;
         msg << "[" << __FILENAME__ << "::setMonomerCoordinates" << "] "
@@ -2464,14 +2462,14 @@ void UpdaterGPUScBFM_AB_Type::setMonomerCoordinates
         throw std::invalid_argument( msg.str() );
     }
 #endif
-    mPolymerSystem.at( 4*i+0 ) = x;
-    mPolymerSystem.at( 4*i+1 ) = y;
-    mPolymerSystem.at( 4*i+2 ) = z;
+    mPolymerSystem->host[i].x = x;
+    mPolymerSystem->host[i].y = y;
+    mPolymerSystem->host[i].z = z;
 }
 
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mPolymerSystem.at( 4*i+0 ); }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mPolymerSystem.at( 4*i+1 ); }
-int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mPolymerSystem.at( 4*i+2 ); }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInX( T_Id i ){ return mPolymerSystem->host[i].x; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInY( T_Id i ){ return mPolymerSystem->host[i].y; }
+int32_t UpdaterGPUScBFM_AB_Type::getMonomerPositionInZ( T_Id i ){ return mPolymerSystem->host[i].z; }
 
 void UpdaterGPUScBFM_AB_Type::setConnectivity
 (
@@ -2526,8 +2524,8 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
     /* determine log2 for mBoxX and mBoxX * mBoxY to be used for bitshifting
      * the indice instead of multiplying ... WHY??? I don't think it is faster,
      * but much less readable */
-    mBoxXLog2  = 0; auto dummy = mBoxX; while ( dummy >>= 1 ) ++mBoxXLog2;
-    mBoxXYLog2 = 0; dummy = mBoxX*mBoxY;    while ( dummy >>= 1 ) ++mBoxXYLog2;
+    mBoxXLog2  = 0; auto dummy = mBoxX ; while ( dummy >>= 1 ) ++mBoxXLog2;
+    mBoxXYLog2 = 0; dummy = mBoxX*mBoxY; while ( dummy >>= 1 ) ++mBoxXYLog2;
     if ( mBoxX != ( 1u << mBoxXLog2 ) || mBoxX * boxY != ( 1u << mBoxXYLog2 ) )
     {
         std::stringstream msg;
@@ -2538,35 +2536,6 @@ void UpdaterGPUScBFM_AB_Type::setLatticeSize
             << ", boxX*boY=" << mBoxX * mBoxY << " =? 2^" << mBoxXYLog2
             << " = " << ( 1 << mBoxXYLog2 ) << " )\n";
         throw std::runtime_error( msg.str() );
-    }
-
-    if ( mLattice != NULL )
-        delete[] mLattice;
-    mLattice = new T_Lattice[ mBoxX * mBoxY * mBoxZ ];
-    std::memset( (void *) mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
-}
-
-void UpdaterGPUScBFM_AB_Type::populateLattice()
-{
-    std::memset( mLattice, 0, mBoxX * mBoxY * mBoxZ * sizeof( *mLattice ) );
-    for ( size_t i = 0; i < mnAllMonomers; ++i )
-    {
-        auto const j = linearizeBoxVectorIndex( mPolymerSystem[ 4*i+0 ],
-                                                mPolymerSystem[ 4*i+1 ],
-                                                mPolymerSystem[ 4*i+2 ] );
-        if ( j >= mBoxX * mBoxY * mBoxZ )
-        {
-            std::stringstream msg;
-            msg
-            << "[populateLattice] " << i << " -> ("
-            << mPolymerSystem[ 4*i+0 ] << ","
-            << mPolymerSystem[ 4*i+1 ] << ","
-            << mPolymerSystem[ 4*i+2 ] << ") -> " << j << " is out of range "
-            << "of (" << mBoxX << "," << mBoxY << "," << mBoxZ << ") = "
-            << mBoxX * mBoxY * mBoxZ << "\n";
-            throw std::runtime_error( msg.str() );
-        }
-        mLattice[ j ] = 1;
     }
 }
 
@@ -2692,9 +2661,9 @@ void UpdaterGPUScBFM_AB_Type::checkSystem() const
      Lattice is an array of size Box_X*Box_Y*Box_Z. PolymerSystem holds the monomer positions which I strongly guess are supposed to be in the range 0<=x<Box_X. If I see correctly, then this part checks for excluded volume by occupying a 2x2x2 cube for each monomer in Lattice and then counting the total occupied cells and compare it to the theoretical value of nMonomers * 8. But Lattice seems to be too small for that kinda usage! I.e. for two particles, one being at x=0 and the other being at x=Box_X-1 this test should return that the excluded volume condition is not met! Therefore the effective box size is actually (Box_X-1,Box_X-1,Box_Z-1) which in my opinion should be a bug ??? */
     for ( T_Id i = 0; i < mnAllMonomers; ++i )
     {
-        int32_t const & x = mPolymerSystem[ 4*i   ];
-        int32_t const & y = mPolymerSystem[ 4*i+1 ];
-        int32_t const & z = mPolymerSystem[ 4*i+2 ];
+        int32_t const & x = mPolymerSystem->host[i].x;
+        int32_t const & y = mPolymerSystem->host[i].y;
+        int32_t const & z = mPolymerSystem->host[i].z;
         /**
          * @verbatim
          *           ...+---+---+
@@ -2741,10 +2710,10 @@ void UpdaterGPUScBFM_AB_Type::checkSystem() const
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        T_Coordinate const * const neighbor = & mPolymerSystem[ 4*mNeighbors[i].neighborIds[ iNeighbor ] ];
-        auto dx = (int) neighbor[0] - (int) mPolymerSystem[ 4*i+0 ];
-        auto dy = (int) neighbor[1] - (int) mPolymerSystem[ 4*i+1 ];
-        auto dz = (int) neighbor[2] - (int) mPolymerSystem[ 4*i+2 ];
+        auto const neighbor = mPolymerSystem->host[ mNeighbors[i].neighborIds[ iNeighbor ] ];
+        auto dx = (int) neighbor.x - (int) mPolymerSystem->host[i].x;
+        auto dy = (int) neighbor.y - (int) mPolymerSystem->host[i].y;
+        auto dz = (int) neighbor.z - (int) mPolymerSystem->host[i].z;
         /* with this uncommented, we can ignore if a monomer jumps over the
          * whole box range or T_UCoordinateCuda range */
         /*
@@ -2772,11 +2741,11 @@ void UpdaterGPUScBFM_AB_Type::checkSystem() const
             if ( mForbiddenBonds[ linearizeBondVectorIndex( dx, dy, dz ) ] )
                 msg << "This particular bond is forbidden: ";
             msg << "(" << dx << "," << dy<< "," << dz << ") between monomer "
-                << i << " at (" << mPolymerSystem[ 4*i+0 ] << ","
-                                << mPolymerSystem[ 4*i+1 ] << ","
-                                << mPolymerSystem[ 4*i+2 ] << ") and monomer "
+                << i << " at (" << mPolymerSystem->host[i].x << ","
+                                << mPolymerSystem->host[i].y << ","
+                                << mPolymerSystem->host[i].z << ") and monomer "
                 << mNeighbors[i].neighborIds[ iNeighbor ] << " at ("
-                << neighbor[0] << "," << neighbor[1] << "," << neighbor[2] << ")"
+                << neighbor.x << "," << neighbor.y << "," << neighbor.z << ")"
                 << std::endl;
              throw std::runtime_error( msg.str() );
         }
@@ -2791,7 +2760,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     std::clock_t const t0 = std::clock();
 
     CUDA_ERROR( cudaStreamSynchronize( mStream ) ); // finish e.g. initializations
-    mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
+    CUDA_ERROR( cudaMemcpy( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice ) );
     auto const nSpecies = mnElementsInGroup.size();
     #if defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
         cudaStream_t streamMemset = 0;
@@ -2903,6 +2872,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                     mnMonomersPadded
                 );
             #endif
+        #if 1
             mPolymerSystemSorted            ->pop();
             mviPolymerSystemSortedVirtualBox->pop();
             /* untangle reordered array so that LeMonADE can use it again */
@@ -2911,10 +2881,10 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
                 if ( i < 10 )
                     mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
-                mPolymerSystem[ 4*i+0 ] = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
-                mPolymerSystem[ 4*i+1 ] = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
-                mPolymerSystem[ 4*i+2 ] = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
-                mPolymerSystem[ 4*i+3 ] = pTarget->w;
+                mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
+                mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
+                mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
+                mPolymerSystem->host[i].w = pTarget->w;
             }
 
             initializeSpatialSorting();
@@ -2940,8 +2910,26 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             mNeighborsSorted     ->pushAsync();
             mNeighborsSortedSizes->pushAsync();
 
-            initializeSortedMonomerPositions();
-            mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
+            for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+            {
+                auto const x = mPolymerSystem->host[i].x;
+                auto const y = mPolymerSystem->host[i].y;
+                auto const z = mPolymerSystem->host[i].z;
+
+                mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
+                mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
+                mPolymerSystemSorted->host[ miToiNew[i] ].z = z & mBoxZM1;
+                mPolymerSystemSorted->host[ miToiNew[i] ].w = mNeighbors[i].size;
+
+                mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+                mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+                mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+            }
+            mPolymerSystemSorted            ->pushAsync();
+            mviPolymerSystemSortedVirtualBox->pushAsync();
+
+        #endif
+            CUDA_ERROR( cudaMemcpy( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice ) );
 
             if ( mLog.isActive( "Benchmark" ) )
             {
@@ -3326,10 +3314,10 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
         auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
         if ( i < 10 )
             mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
-        mPolymerSystem[ 4*i+0 ] = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
-        mPolymerSystem[ 4*i+1 ] = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
-        mPolymerSystem[ 4*i+2 ] = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
-        mPolymerSystem[ 4*i+3 ] = pTarget->w;
+        mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
+        mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
+        mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
+        mPolymerSystem->host[i].w = pTarget->w;
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
