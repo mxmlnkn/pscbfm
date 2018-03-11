@@ -251,7 +251,7 @@ private:
     std::vector< T_Id    > mviSubGroupOffsets; /* stores offsets (in number of elements not bytes) to each aligned subgroup vector in mPolymerSystemSorted */
     MirroredVector< T_Id > * miToiNew; /* for each old monomer stores the new position */
     MirroredVector< T_Id > * miNewToi; /* for each new monomer stores the old position */
-    MirroredVector< T_Id > * mviNewToiSpatial; /* used for sorting monomers along z-curve on GPU */
+    MirroredVector< T_Id > * miNewToiSpatial; /* used for sorting monomers along z-curve on GPU */
     MirroredVector< T_Id > * mvKeysZOrderLinearIds; /* used for sorting monomers along z-curve on GPU */
 
     /* needed to decide whether we can even check autocoloring with given one */

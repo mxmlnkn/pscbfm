@@ -137,6 +137,9 @@ __device__ __constant__ uint32_t dcBoxXLog2 ;  // lattice shift in X
 __device__ __constant__ uint32_t dcBoxXYLog2;  // lattice shift in X*Y
 
 
+}
+
+
 /* Since CUDA 5.5 (~2014) there do exist texture objects which are much
  * easier and can actually be used as kernel arguments!
  * @see https://devblogs.nvidia.com/parallelforall/cuda-pro-tip-kepler-texture-objects-improve-performance-and-flexibility/
@@ -1057,6 +1060,10 @@ __device__ __host__ inline int16_t linearizeBondVectorIndex
            ( ( z & int16_t(7) /* 0b111 */ ) << 6 );
 }
 
+
+namespace {
+
+
 /**
  * Goes over all monomers of a species given specified by texSpeciesIndices
  * draws a random direction for them and checks whether that move is possible
@@ -1505,7 +1512,7 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mPolymerFlags                    ( NULL ),
    miToiNew                         ( NULL ),
    miNewToi                         ( NULL ),
-   mviNewToiSpatial                 ( NULL ),
+   miNewToiSpatial                 ( NULL ),
    mvKeysZOrderLinearIds            ( NULL ),
    mNeighborsSorted                 ( NULL ),
    mNeighborsSortedSizes            ( NULL ),
@@ -1564,7 +1571,7 @@ void UpdaterGPUScBFM_AB_Type::destruct()
     deletePointer( mPolymerFlags                    );
     deletePointer( miToiNew                         );
     deletePointer( miNewToi                         );
-    deletePointer( mviNewToiSpatial                 );
+    deletePointer( miNewToiSpatial                 );
     deletePointer( mvKeysZOrderLinearIds            );
     deletePointer( mNeighborsSorted                 );
     deletePointer( mNeighborsSortedSizes            );
@@ -1772,28 +1779,6 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
     }
 }
 
-__global__ void kernelCalcIDs
-(
-    T_UCoordinatesCuda const * const dpPolymerSystem  ,
-    T_Id                     * const dpZOrderLinearIds,
-    T_Id                       const nMonomers
-)
-{
-#if 0
-    for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
-          iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
-    {
-    for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
-    {
-        vKeysZOrderLinearIds.at( miToiNew->host[ iOld ] ) = linearizeBoxVectorIndex(
-            mPolymerSystem->host[ iOld ].x,
-            mPolymerSystem->host[ iOld ].y,
-            mPolymerSystem->host[ iOld ].z
-        );
-    }
-#endif
-}
-
 __global__ void kernelApplyMapping
 (
     T_UCoordinatesCuda const * const dpPolymerSystem ,
@@ -1828,8 +1813,8 @@ __global__ void kernelApplyMapping
     }
     /* apply sorting to the total map, just like function composition */
     std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
-    for ( T_Id iNew = 0u; iNew < mviNewToiSpatial.size() ; ++iNew )
-        iNewToiComposition.at( iNew ) = miNewToi->host[ mviNewToiSpatial.at( iNew ] );
+    for ( T_Id iNew = 0u; iNew < miNewToiSpatial.size() ; ++iNew )
+        iNewToiComposition.at( iNew ) = miNewToi->host[ miNewToiSpatial.at( iNew ] );
     miNewToi = iNewToiComposition;
 #endif
 }
@@ -1858,6 +1843,14 @@ __global__ void kernelUndoPolymerSystemSorting
         dpPolymerSystem[ iOld ] = rSorted;
     }
 }
+
+struct LinearizeBoxVectorIndexFunctor
+{
+    __device__ inline T_Id operator()( T_UCoordinatesCuda const & r ) const
+    {
+        return linearizeBoxVectorIndex( r.x, r.y, r.z );
+    }
+};
 
 /**
  * this works on mPolymerSystemSorted and resorts the monomers along a
@@ -1893,8 +1886,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         );
     }
     #endif
-#if 1
-    #if 1
+
     miNewToi->push();
     kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
     (
@@ -1904,38 +1896,49 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         mPolymerSystem                  ->gpu,
         mnMonomersPadded
     );
-    mPolymerSystem->pop();
-    #else
-    mPolymerSystemSorted            ->pop();
-    mviPolymerSystemSortedVirtualBox->pop();
-    /* untangle reordered array so that LeMonADE can use it again */
-    #if 0
-    for ( T_Id i = 0u; i < mnAllMonomers; ++i )
-    {
-        auto const pTarget = mPolymerSystemSorted->host + miToiNew->host[i];
-        mPolymerSystem->host[i].x = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x * mBoxX;
-        mPolymerSystem->host[i].y = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y * mBoxY;
-        mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z * mBoxZ;
-        mPolymerSystem->host[i].w = pTarget->w;
-    }
-    #else
-    for ( T_Id iNew = 0u; iNew < mnMonomersPadded; ++iNew )
-    {
-        auto const iOld = miNewToi->host[ iNew ];
-        if ( iOld == UINT32_MAX )
-            continue;
-        auto const rsmall = mPolymerSystemSorted->host[ iNew ];
-        T_Coordinates rSorted = { rsmall.x, rsmall.y, rsmall.z, rsmall.w };
-        auto const nPos = mviPolymerSystemSortedVirtualBox->host[ iNew ];
-        rSorted.x += nPos.x * mBoxX;
-        rSorted.y += nPos.y * mBoxY;
-        rSorted.z += nPos.z * mBoxZ;
-        mPolymerSystem->host[ iOld ] = rSorted;
-    }
-    #endif
-    #endif
 
-    initializeSpatialSorting();
+    /* mapping new (monomers spatially sorted) index to old (species sorted) index */
+    if ( miNewToiSpatial       == NULL ) miNewToiSpatial       = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
+    if ( mvKeysZOrderLinearIds == NULL ) mvKeysZOrderLinearIds = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
+    assert( miNewToiSpatial       != NULL );
+    assert( mvKeysZOrderLinearIds != NULL );
+
+    thrust::sequence( thrust::system::cuda::par, miNewToiSpatial->gpu, miNewToiSpatial->gpu + miNewToiSpatial->nElements );
+
+    /* @see https://thrust.github.io/doc/group__transformations.html#ga281b2e453bfa53807eda1d71614fb504 */
+    thrust::transform( thrust::system::cuda::par,
+        mPolymerSystemSorted ->gpu,
+        mPolymerSystemSorted ->gpu + mPolymerSystemSorted->nElements,
+        mvKeysZOrderLinearIds->gpu,
+        LinearizeBoxVectorIndexFunctor()
+    );
+    /* sort per sublists (each species) by key, not the whole list */
+    for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
+    {
+        thrust::sort_by_key( thrust::system::cuda::par,
+            mvKeysZOrderLinearIds->gpu + mviSubGroupOffsets.at( iSpecies ),
+            mvKeysZOrderLinearIds->gpu + mviSubGroupOffsets.at( iSpecies ) + mnElementsInGroup.at( iSpecies ),
+            miNewToiSpatial      ->gpu + mviSubGroupOffsets.at( iSpecies )
+        );
+    }
+    miNewToiSpatial->pop();
+
+    /* apply the newly found sorting into the total map just like function composition */
+    std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
+    for ( T_Id iNew = 0u; iNew < miNewToiSpatial->nElements ; ++iNew )
+        iNewToiComposition.at( iNew ) = miNewToi->host[ miNewToiSpatial->host[ iNew ] ];
+    std::memcpy( miNewToi->host, &iNewToiComposition[0], miNewToi->nBytes );
+
+    /* create/update convenience reverse mapping */
+    thrust::fill( thrust::host, miToiNew->host, miToiNew->host + miToiNew->nElements, UINT32_MAX );
+    for ( auto iNew = 0u; iNew < miNewToi->nElements; ++iNew )
+    {
+        if ( miNewToi->host[ iNew ] != UINT32_MAX )
+            miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
+    }
+
+
+
     {
         size_t iSpecies = 0u;
         /* iterate over sorted instead of unsorted array so that calculating
@@ -1955,6 +1958,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         }
     }
 
+    mPolymerSystem       ->pop();
     mNeighborsSorted     ->pushAsync();
     mNeighborsSortedSizes->pushAsync();
 
@@ -1976,33 +1980,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     mPolymerSystemSorted            ->pushAsync();
     mviPolymerSystemSortedVirtualBox->pushAsync();
 
-#endif
     CUDA_ERROR( cudaMemcpy( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice ) );
-
-#if 0
-    thrust::sequence( thrust::system::cuda::par, mviNewToiSpatial->gpu, mviNewToiSpatial->gpu + mviNewToiSpatial->nElements );
-    auto const nThreads = 128;
-    auto const nBlocks  = ceilDiv( mPolymerSystemSorted->nElements, nThreads );
-    kernelCalcIDs<<< nBlocks, nThreads, 0, mStream >>>( mPolymerSystemSorted->gpu,
-        mvKeysZOrderLinearIds->gpu, mPolymerSystemSorted->nElements );
-    /* sort per sublists (each species) by key, not the whole list */
-    for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
-    {
-        thrust::sort_by_key( thrust::system::cuda::par,
-            mvKeysZOrderLinearIds->gpu + mviSubGroupOffsets.at( iSpecies ),
-            mvKeysZOrderLinearIds->gpu + mviSubGroupOffsets.at( iSpecies ) + mnElementsInGroup.at( iSpecies ),
-            mviNewToiSpatial     ->gpu + mviSubGroupOffsets.at( iSpecies )
-        );
-    }
-
-    /* create/update convenience reverse mapping */
-    std::fill( miToiNew->host, miToiNew->host + miToiNew->nElements, UINT32_MAX );
-    for ( auto iNew = 0u; iNew < miNewToi->nElements; ++iNew )
-    {
-        if ( miNewToi->host[ iNew ] != UINT32_MAX )
-            miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
-    }
-#endif
 }
 
 void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
@@ -2057,12 +2035,8 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
         mNeighborsSortedInfo.newMatrix( MAX_CONNECTIVITY, mnElementsInGroup[i] );
     if ( mNeighborsSorted      == NULL ) mNeighborsSorted      = new MirroredVector< T_Id    >( mNeighborsSortedInfo.getRequiredElements(), mStream );
     if ( mNeighborsSortedSizes == NULL ) mNeighborsSortedSizes = new MirroredVector< uint8_t >( mnMonomersPadded, mStream );
-    if ( mviNewToiSpatial      == NULL ) mviNewToiSpatial      = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
-    if ( mvKeysZOrderLinearIds == NULL ) mvKeysZOrderLinearIds = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
     assert( mNeighborsSorted      != NULL );
     assert( mNeighborsSortedSizes != NULL );
-    assert( mviNewToiSpatial      != NULL );
-    assert( mvKeysZOrderLinearIds != NULL );
     mNeighborsSorted     ->memset(0);
     mNeighborsSortedSizes->memset(0);
 
