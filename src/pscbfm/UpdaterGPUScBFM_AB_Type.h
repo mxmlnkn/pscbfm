@@ -246,12 +246,14 @@ private:
      * @see http://www.gotw.ca/gotw/050.htm
      * -> wow std::vector<bool> already optimized for space with bit masking!
      * This is only needed once for initializing mMonomerIdsA,B */
-    int32_t * mAttributeSystem;
+    std::vector< int32_t > mAttributeSystem;
     std::vector< T_Color > mGroupIds; /* for each monomer stores the color / attribute / group ID/tag */
-    std::vector< size_t > mnElementsInGroup;
-    std::vector< size_t > miToiNew;   /* for each old monomer stores the new position */
-    std::vector< size_t > miNewToi;   /* for each new monomer stores the old position */
-    std::vector< size_t > viSubGroupOffsets; /* stores offsets (in number of elements not bytes) to each aligned subgroup vector in mPolymerSystemSorted */
+    std::vector< size_t  > mnElementsInGroup;
+    std::vector< T_Id    > mviSubGroupOffsets; /* stores offsets (in number of elements not bytes) to each aligned subgroup vector in mPolymerSystemSorted */
+    std::vector   < T_Id > miToiNew; /* for each old monomer stores the new position */
+    std::vector   < T_Id > miNewToi; /* for each new monomer stores the old position */
+    MirroredVector< T_Id > * mviNewToiSpatial; /* used for sorting monomers along z-curve on GPU */
+    MirroredVector< T_Id > * mvKeysZOrderLinearIds; /* used for sorting monomers along z-curve on GPU */
 
     /* needed to decide whether we can even check autocoloring with given one */
     bool bSetAttributeCalled;
@@ -377,6 +379,7 @@ private:
     void initializeBondTable();
     void initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
     void initializeSpatialSorting(); /* miNewToi and miToiNew will be updated so that monomers are sorted spatially per species */
+    void doSpatialSorting();
     void initializeSortedNeighbors();
     void initializeSortedMonomerPositions();
     void initializeLattices();
