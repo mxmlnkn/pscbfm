@@ -389,6 +389,7 @@ private:
      * sets monomer positions given in mPolymerSystem in mLattice to occupied
      */
     void populateLattice();
+    void doCopyBack();
 
 public:
     void initialize();

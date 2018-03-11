@@ -1792,7 +1792,7 @@ __global__ void kernelApplyMapping
 #if 0
     /* apply sorting for polymers, see initializePolymerSystemSorted */
 
-    /* apply sorting for neighbor info, see initializeNeighborSorting */
+    /* apply sorting for neighbor info, see initializeSortedNeighbors */
     size_t iSpecies = 0u;
     for ( size_t i = 0u; i < miNewToi.size(); ++i )
     {
@@ -1893,7 +1893,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
     miNewToi = iNewToiComposition;
 
     /* create/update convenience reverse mapping */
-    std::fill( miToiNew.begin(), miToiNew.end(), UINT32_MAX );
+    thrust::fill( thrust::host, miToiNew.begin(), miToiNew.end(), UINT32_MAX );
     for ( auto iNew = 0u; iNew < miNewToi.size(); ++iNew )
     {
         if ( miNewToi.at( iNew ) != UINT32_MAX )
@@ -1907,18 +1907,18 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
     /* adjust neighbor IDs to new sorted PolymerSystem and also sort that array.
      * Bonds are not supposed to change, therefore we don't need to push and
      * pop them each time we do something on the GPU! */
-    assert( mNeighborsSorted      == NULL );
-    assert( mNeighborsSortedSizes == NULL );
-    assert( mviNewToiSpatial      == NULL );
-    assert( mvKeysZOrderLinearIds == NULL );
 
     assert( mNeighborsSortedInfo.getRequiredBytes() == 0 );
     for ( size_t i = 0u; i < mnElementsInGroup.size(); ++i )
         mNeighborsSortedInfo.newMatrix( MAX_CONNECTIVITY, mnElementsInGroup[i] );
-    mNeighborsSorted      = new MirroredVector< T_Id    >( mNeighborsSortedInfo.getRequiredElements(), mStream );
-    mNeighborsSortedSizes = new MirroredVector< uint8_t >( mnMonomersPadded, mStream );
-    mviNewToiSpatial      = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
-    mvKeysZOrderLinearIds = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
+    if ( mNeighborsSorted      == NULL ) mNeighborsSorted      = new MirroredVector< T_Id    >( mNeighborsSortedInfo.getRequiredElements(), mStream );
+    if ( mNeighborsSortedSizes == NULL ) mNeighborsSortedSizes = new MirroredVector< uint8_t >( mnMonomersPadded, mStream );
+    if ( mviNewToiSpatial      == NULL ) mviNewToiSpatial      = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
+    if ( mvKeysZOrderLinearIds == NULL ) mvKeysZOrderLinearIds = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
+    assert( mNeighborsSorted      != NULL );
+    assert( mNeighborsSortedSizes != NULL );
+    assert( mviNewToiSpatial      != NULL );
+    assert( mvKeysZOrderLinearIds != NULL );
     mNeighborsSorted     ->memset(0);
     mNeighborsSortedSizes->memset(0);
 
@@ -2021,12 +2021,12 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
 void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
 {
     /* sort groups into new array and save index mappings */
-    assert( mPolymerSystemSorted             == NULL );
-    assert( mPolymerSystemSortedOld          == NULL );
-    assert( mviPolymerSystemSortedVirtualBox == NULL );
-    mPolymerSystemSorted             = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
-    mPolymerSystemSortedOld          = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
-    mviPolymerSystemSortedVirtualBox = new MirroredVector< T_Coordinates      >( mnMonomersPadded, mStream );
+    if ( mPolymerSystemSorted             == NULL )mPolymerSystemSorted             = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
+    if ( mPolymerSystemSortedOld          == NULL )mPolymerSystemSortedOld          = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
+    if ( mviPolymerSystemSortedVirtualBox == NULL )mviPolymerSystemSortedVirtualBox = new MirroredVector< T_Coordinates      >( mnMonomersPadded, mStream );
+    assert( mPolymerSystemSorted             != NULL );
+    assert( mPolymerSystemSortedOld          != NULL );
+    assert( mviPolymerSystemSortedVirtualBox != NULL );
     #ifndef NDEBUG
         mPolymerSystemSorted            ->memset( 0 );
         mPolymerSystemSortedOld         ->memset( 0 );
@@ -2355,14 +2355,14 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
     checkMonomerReorderMapping();
     auto const tSpatialSorting0 = std::chrono::high_resolution_clock::now();
-    //initializeSpatialSorting();
+    initializeSpatialSorting();
     {
         auto const tSpatialSorting1 = std::chrono::high_resolution_clock::now();
         std::stringstream sBuffered;
         sBuffered << "tSpatialSorting = " << std::chrono::duration<double>( tSpatialSorting1 - tSpatialSorting0 ).count() << "s\n";
         mLog( "Benchmark" ) << sBuffered.str();
     }
-    //checkMonomerReorderMapping();
+    checkMonomerReorderMapping();
     initializeSortedNeighbors();
     initializeSortedMonomerPositions();
     checkSystem();
@@ -2599,8 +2599,8 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
      */
 
 #if defined( DO_OVERFLOW_CHECK_ON_HOST )
-    mPolymerSystemSorted            ->pop();
-    mviPolymerSystemSortedVirtualBox->pop();
+    mPolymerSystemSorted            ->popAsync();
+    mviPolymerSystemSortedVirtualBox->popAsync();
     CUDA_ERROR( cudaStreamSynchronize( mStream ) );
 
     size_t nPrintInfo = 10;
@@ -2874,9 +2874,87 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         cudaEventRecord( tGpu0, mStream );
     }
 
+    cudaEvent_t tSort0, tSort1;
+    if ( mLog.isActive( "Benchmark" ) )
+    {
+        cudaEventCreate( &tSort0 );
+        cudaEventCreate( &tSort1 );
+    }
+
     /* run simulation */
     for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep )
     {
+        if ( iStep == 0 )
+        {
+            if ( mLog.isActive( "Benchmark" ) )
+                cudaEventRecord( tSort0, mStream );
+
+            /* because resorting changes the order we have to do the full
+             * overflow checks and also update mPolymerSystemSortedOld ! */
+            #if defined( USE_UINT8_POSITIONS )
+                auto const nThreads = 128;
+                auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
+                /* the padding values do not change, so we can simply let the threads
+                 * calculate them without worries and save the loop over the species */
+                kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+                    mPolymerSystemSortedOld         ->gpu,
+                    mPolymerSystemSorted            ->gpu,
+                    mviPolymerSystemSortedVirtualBox->gpu,
+                    mnMonomersPadded
+                );
+            #endif
+            mPolymerSystemSorted            ->pop();
+            mviPolymerSystemSortedVirtualBox->pop();
+            /* untangle reordered array so that LeMonADE can use it again */
+            for ( T_Id i = 0u; i < mnAllMonomers; ++i )
+            {
+                auto const pTarget = mPolymerSystemSorted->host + miToiNew[i];
+                if ( i < 10 )
+                    mLog( "Info" ) << "Copying back " << i << " from " << miToiNew[i] << "\n";
+                mPolymerSystem[ 4*i+0 ] = pTarget->x + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x * mBoxX;
+                mPolymerSystem[ 4*i+1 ] = pTarget->y + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y * mBoxY;
+                mPolymerSystem[ 4*i+2 ] = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z * mBoxZ;
+                mPolymerSystem[ 4*i+3 ] = pTarget->w;
+            }
+
+            initializeSpatialSorting();
+            {
+                size_t iSpecies = 0u;
+                /* iterate over sorted instead of unsorted array so that calculating
+                 * the current species we are working on is easier */
+                for ( size_t i = 0u; i < miNewToi.size(); ++i )
+                {
+                    if ( iSpecies+1 < mviSubGroupOffsets.size() && i >= mviSubGroupOffsets[ iSpecies+1 ] )
+                        ++iSpecies;
+                    if ( miNewToi[i] >= mnAllMonomers )
+                        continue;
+                    mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi[i] ].size;
+                    auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
+                    for ( size_t j = 0u; j < mNeighbors[  miNewToi[i] ].size; ++j )
+                    {
+                        mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew[ mNeighbors[ miNewToi[i] ].neighborIds[j] ];
+                    }
+                }
+            }
+
+            mNeighborsSorted     ->pushAsync();
+            mNeighborsSortedSizes->pushAsync();
+
+            initializeSortedMonomerPositions();
+            mPolymerSystemSortedOld->memcpyFrom( *mPolymerSystemSorted );
+
+            if ( mLog.isActive( "Benchmark" ) )
+            {
+                cudaEventRecord( tSort1, mStream );
+                cudaEventSynchronize( tSort1 );  // basically a StreamSynchronize
+                float milliseconds = 0;
+                cudaEventElapsedTime( & milliseconds, tSort0, tSort1 );
+                std::stringstream sBuffered;
+                sBuffered << "tSort = " << milliseconds / 1000. << "s\n";
+                mLog( "Benchmark" ) << sBuffered.str();
+            }
+        }
+
         #if defined( USE_UINT8_POSITIONS )
             /**
              * for uint8_t we have to check for overflows every 127 steps, as
@@ -3186,6 +3264,21 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         }
     }
 
+    doCopyBack();
+
+    if ( mLog.isActive( "Benchmark" ) )
+    {
+        std::clock_t const t1 = std::clock();
+        double const dt = float(t1-t0) / CLOCKS_PER_SEC;
+        mLog( "Benchmark" )
+        << "run time (GPU): " << nMonteCarloSteps << "\n"
+        << "mcs = " << nMonteCarloSteps  << "  speed [performed monomer try and move/s] = MCS*N/t: "
+        << nMonteCarloSteps * ( mnAllMonomers / dt )  << "     runtime[s]:" << dt << "\n";
+    }
+}
+
+void UpdaterGPUScBFM_AB_Type::doCopyBack()
+{
     mtCopyBack0 = std::chrono::high_resolution_clock::now();
 
     /* all MCS are done- copy information back from GPU to host */
@@ -3212,7 +3305,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             cudaEventRecord( tOverflowCheck0, mStream );
         }
 
-        findAndRemoveOverflows();
+        findAndRemoveOverflows( true /* copy to host mPolymerSystemSorted, mviPolymerSystemSortedVirtualBox */ );
 
         if ( mLog.isActive( "Benchmark" ) )
         {
@@ -3240,16 +3333,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     checkSystem(); // no-op if "Check"-level deactivated
-
-    if ( mLog.isActive( "Benchmark" ) )
-    {
-        std::clock_t const t1 = std::clock();
-        double const dt = float(t1-t0) / CLOCKS_PER_SEC;
-        mLog( "Benchmark" )
-        << "run time (GPU): " << nMonteCarloSteps << "\n"
-        << "mcs = " << nMonteCarloSteps  << "  speed [performed monomer try and move/s] = MCS*N/t: "
-        << nMonteCarloSteps * ( mnAllMonomers / dt )  << "     runtime[s]:" << dt << "\n";
-    }
 }
 
 /**
