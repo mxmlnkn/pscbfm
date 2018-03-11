@@ -1855,7 +1855,7 @@ __global__ void kernelUndoPolymerSystemSorting
         rSorted.x += nPos.x * dcBoxX;
         rSorted.y += nPos.y * dcBoxY;
         rSorted.z += nPos.z * dcBoxZ;
-        dpPolymerSystem[ iNew ] = rSorted;
+        dpPolymerSystem[ iOld ] = rSorted;
     }
 }
 
@@ -1877,15 +1877,15 @@ __global__ void kernelUndoPolymerSystemSorting
  */
 void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
 {
+    auto const nThreads = 128;
+    auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
     /* because resorting changes the order we have to do the full
      * overflow checks and also update mPolymerSystemSortedOld ! */
     #if defined( USE_UINT8_POSITIONS )
     {
-        auto const nThreads = 128;
-        auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
         /* the padding values do not change, so we can simply let the threads
          * calculate them without worries and save the loop over the species */
-        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+        kernelTreatOverflows<<< nBlocksP, nThreads, 0, mStream >>>(
             mPolymerSystemSortedOld         ->gpu,
             mPolymerSystemSorted            ->gpu,
             mviPolymerSystemSortedVirtualBox->gpu,
@@ -1894,24 +1894,22 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     }
     #endif
 #if 1
-    #if 0
-    {
-        auto const nThreads = 128;
-        auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
-        kernelUndoPolymerSystemSorting<<< nBlocks, nThreads, 0, mStream >>>
-        (
-            mPolymerSystemSorted            ->gpu,
-            mviPolymerSystemSortedVirtualBox->gpu,
-            miNewToi                        ->gpu,
-            mPolymerSystem                  ->gpu,
-            nMonomersPadded
-        )
-    }
-    mPolymerSystem.pop();
+    #if 1
+    miNewToi->push();
+    kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
+    (
+        mPolymerSystemSorted            ->gpu,
+        mviPolymerSystemSortedVirtualBox->gpu,
+        miNewToi                        ->gpu,
+        mPolymerSystem                  ->gpu,
+        mnMonomersPadded
+    );
+    mPolymerSystem->pop();
     #else
     mPolymerSystemSorted            ->pop();
     mviPolymerSystemSortedVirtualBox->pop();
     /* untangle reordered array so that LeMonADE can use it again */
+    #if 0
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
         auto const pTarget = mPolymerSystemSorted->host + miToiNew->host[i];
@@ -1920,6 +1918,21 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z * mBoxZ;
         mPolymerSystem->host[i].w = pTarget->w;
     }
+    #else
+    for ( T_Id iNew = 0u; iNew < mnMonomersPadded; ++iNew )
+    {
+        auto const iOld = miNewToi->host[ iNew ];
+        if ( iOld == UINT32_MAX )
+            continue;
+        auto const rsmall = mPolymerSystemSorted->host[ iNew ];
+        T_Coordinates rSorted = { rsmall.x, rsmall.y, rsmall.z, rsmall.w };
+        auto const nPos = mviPolymerSystemSortedVirtualBox->host[ iNew ];
+        rSorted.x += nPos.x * mBoxX;
+        rSorted.y += nPos.y * mBoxY;
+        rSorted.z += nPos.z * mBoxZ;
+        mPolymerSystem->host[ iOld ] = rSorted;
+    }
+    #endif
     #endif
 
     initializeSpatialSorting();
@@ -2021,8 +2034,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
     std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
     for ( T_Id iNew = 0u; iNew < iNewToiSpatial.size() ; ++iNew )
         iNewToiComposition.at( iNew ) = miNewToi->host[ iNewToiSpatial.at( iNew ) ];
-    for ( T_Id i = 0u; i < miNewToi->nElements; ++i )
-        miNewToi->host[i] = iNewToiComposition[i];
+    std::memcpy( miNewToi->host, &iNewToiComposition[0], miNewToi->nBytes );
 
     /* create/update convenience reverse mapping */
     thrust::fill( thrust::host, miToiNew->host, miToiNew->host + miToiNew->nElements, UINT32_MAX );
