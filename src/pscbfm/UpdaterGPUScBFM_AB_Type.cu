@@ -15,7 +15,7 @@
 //#define USE_MOORE_CURVE_FOR_LATTICE
 #define USE_UINT8_POSITIONS
 #ifdef USE_UINT8_POSITIONS
-#   define DO_OVERFLOW_CHECK_ON_HOST // only has a use with USE_UINT8_POSITIONS set
+//#   define DO_OVERFLOW_CHECK_ON_HOST // only has a use with USE_UINT8_POSITIONS set
 #endif
 
 /**
@@ -81,6 +81,7 @@ using vecIntCUDA         = UpdaterGPUScBFM_AB_Type::T_CoordinatesCuda ;
 using T_Coordinate       = UpdaterGPUScBFM_AB_Type::T_Coordinate      ;
 using T_CoordinateCuda   = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda  ;
 using T_Coordinates      = UpdaterGPUScBFM_AB_Type::T_Coordinates     ;
+using T_CoordinateCuda   = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda  ;
 using T_UCoordinateCuda  = UpdaterGPUScBFM_AB_Type::T_UCoordinateCuda ;
 using T_UCoordinatesCuda = UpdaterGPUScBFM_AB_Type::T_UCoordinatesCuda;
 using T_Id               = UpdaterGPUScBFM_AB_Type::T_Id              ;
@@ -247,8 +248,6 @@ __device__ __host__ inline bool isPowerOfTwo( T const & x )
     return __popc( x ) <= 1;
 }
 
-}
-
 /**
  * @see https://en.wikipedia.org/wiki/Moore_curve
  * @see http://www.grant-trebbin.com/2017/03/calculating-hilbert-curve-coordinates.html
@@ -271,39 +270,6 @@ __device__ __host__ inline T fromGrayCode( T x )
     while ( x >>= 1 )
         p ^= x;
     return p;
-}
-
-UpdaterGPUScBFM_AB_Type::T_Id UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
-(
-    T_Coordinate const & ix,
-    T_Coordinate const & iy,
-    T_Coordinate const & iz
-) const
-{
-    #if defined ( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
-        auto const zorder =
-              diluteBits< T_Id, 2 >( T_Id( ix ) & mBoxXM1 )        +
-            ( diluteBits< T_Id, 2 >( T_Id( iy ) & mBoxYM1 ) << 1 ) +
-            ( diluteBits< T_Id, 2 >( T_Id( iz ) & mBoxZM1 ) << 2 );
-        #if defined ( USE_MOORE_CURVE_FOR_LATTICE )
-            return fromGrayCode( zorder );
-        #else
-            return zorder;
-        #endif
-    #elif defined( NOMAGIC )
-        return ( ix % mBoxX ) +
-               ( iy % mBoxY ) * mBoxX +
-               ( iz % mBoxZ ) * mBoxX * mBoxY;
-    #else
-        #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
-            assert( isPowerOfTwo( mBoxXM1 + 1 ) );
-            assert( isPowerOfTwo( mBoxYM1 + 1 ) );
-            assert( isPowerOfTwo( mBoxZM1 + 1 ) );
-        #endif
-        return   ( T_Id( ix ) & mBoxXM1 ) +
-               ( ( T_Id( iy ) & mBoxYM1 ) << mBoxXLog2  ) +
-               ( ( T_Id( iz ) & mBoxZM1 ) << mBoxXYLog2 );
-    #endif
 }
 
 /**
@@ -1445,10 +1411,10 @@ __global__ void kernelTreatOverflows
         auto const r0 = dpPolymerSystemOld        [ iMonomer ];
         auto       r1 = dpPolymerSystem           [ iMonomer ];
         auto       iv = dpiPolymerSystemVirtualBox[ iMonomer ];
-        T_UCoordinatesCuda const dr = {
-            T_UCoordinateCuda( r1.x - r0.x ),
-            T_UCoordinateCuda( r1.y - r0.y ),
-            T_UCoordinateCuda( r1.z - r0.z )
+        T_Coordinates const dr = {
+            r1.x - r0.x,
+            r1.y - r0.y,
+            r1.z - r0.z
         };
 
         auto constexpr boxSizeCudaType = 1ll << ( sizeof( T_UCoordinateCuda ) * CHAR_BIT );
@@ -1461,7 +1427,7 @@ __global__ void kernelTreatOverflows
         if ( std::abs( dr.x ) > T_UCoordinateCuda( boxSizeCudaType / 2 ) )
         {
             r1.x -= boxSizeCudaType - dcBoxX;
-            iv.x -= dr.x > T_UCoordinateCuda(0) ? 1 : -1;
+            iv.x -= dr.x > decltype( dr.x )(0) ? 1 : -1;
         }
         if ( std::abs( dr.y ) > T_UCoordinateCuda( boxSizeCudaType / 2 ) )
         {
@@ -1471,7 +1437,7 @@ __global__ void kernelTreatOverflows
         if ( std::abs( dr.z ) > T_UCoordinateCuda( boxSizeCudaType / 2 ) )
         {
             r1.z -= boxSizeCudaType - dcBoxZ;
-            iv.z -= dr.z > T_UCoordinateCuda(0) ? 1 : -1;
+            iv.z -= dr.z > decltype( dr.z )(0) ? 1 : -1;
         }
 
         dpPolymerSystem           [ iMonomer ] = r1;
@@ -1479,6 +1445,42 @@ __global__ void kernelTreatOverflows
     }
 }
 
+} // end anonymous namespace with typedefs for kernels
+
+
+
+UpdaterGPUScBFM_AB_Type::T_Id UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
+(
+    T_Coordinate const & ix,
+    T_Coordinate const & iy,
+    T_Coordinate const & iz
+) const
+{
+    #if defined ( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
+        auto const zorder =
+              diluteBits< T_Id, 2 >( T_Id( ix ) & mBoxXM1 )        +
+            ( diluteBits< T_Id, 2 >( T_Id( iy ) & mBoxYM1 ) << 1 ) +
+            ( diluteBits< T_Id, 2 >( T_Id( iz ) & mBoxZM1 ) << 2 );
+        #if defined ( USE_MOORE_CURVE_FOR_LATTICE )
+            return fromGrayCode( zorder );
+        #else
+            return zorder;
+        #endif
+    #elif defined( NOMAGIC )
+        return ( ix % mBoxX ) +
+               ( iy % mBoxY ) * mBoxX +
+               ( iz % mBoxZ ) * mBoxX * mBoxY;
+    #else
+        #if DEBUG_UPDATERGPUSCBFM_AB_TYPE > 10
+            assert( isPowerOfTwo( mBoxXM1 + 1 ) );
+            assert( isPowerOfTwo( mBoxYM1 + 1 ) );
+            assert( isPowerOfTwo( mBoxZM1 + 1 ) );
+        #endif
+        return   ( T_Id( ix ) & mBoxXM1 ) +
+               ( ( T_Id( iy ) & mBoxYM1 ) << mBoxXLog2  ) +
+               ( ( T_Id( iz ) & mBoxZM1 ) << mBoxXYLog2 );
+    #endif
+}
 
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
  : mStream                          ( 0    ),
@@ -1518,6 +1520,7 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
     mLog.deactivate( "Stats"     );
     mLog.deactivate( "Warning"   );
 }
+
 
 namespace {
 
@@ -2895,28 +2898,6 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         }
     }
 
-    #if 0 && ! defined( DO_OVERFLOW_CHECK_ON_HOST )
-    for ( auto iSpecies = 0u; iSpecies < nSpecies; ++iSpecies )
-    {
-        auto const nThreads = vnThreadsToTry.at( benchmarkInfo[ iSpecies ].iBestThreadCount );
-        auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
-        /* @todo each species can calculate in parallel */
-        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
-            mPolymerSystemSortedOld         ->gpu + viSubGroupOffsets[ iSpecies ],
-            mPolymerSystemSorted            ->gpu + viSubGroupOffsets[ iSpecies ],
-            mviPolymerSystemSortedVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
-            mnElementsInGroup[ iSpecies ]
-        );
-    }
-    #endif
-
-    /* copy into mPolymerSystem and drop the property tag while doing so.
-     * would be easier and probably more efficient if mPolymerSystem->gpu/host
-     * would be a struct of arrays instead of an array of structs !!! */
-    mPolymerSystemSorted            ->pop();
-    mviPolymerSystemSortedVirtualBox->pop();
-    CUDA_ERROR( cudaStreamSynchronize( mStream ) );
-
     /**
      * find jumps and "deapply" them. We just have to find jumps larger than
      * the number of time steps calculated assuming the monomers can only move
@@ -2934,6 +2915,13 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
      * Actually, as the position is just calculated as +-1 without any wrapping,
      * the only way for jumps to happen is because of type overflows.
      */
+    if ( mLog.isActive( "Benchmark" ) )
+        cudaEventRecord( tOverflowCheck0, mStream );
+#if defined( DO_OVERFLOW_CHECK_ON_HOST )
+    mPolymerSystemSorted            ->pop();
+    mviPolymerSystemSortedVirtualBox->pop();
+    CUDA_ERROR( cudaStreamSynchronize( mStream ) );
+
     size_t nPrintInfo = 10;
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
@@ -2975,6 +2963,33 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
         mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = iv[2];
     }
     mviPolymerSystemSortedVirtualBox->pushAsync();
+#else
+    for ( auto iSpecies = 0u; iSpecies < nSpecies; ++iSpecies )
+    {
+        auto const nThreads = vnThreadsToTry.at( benchmarkInfo[ iSpecies ].iBestThreadCount );
+        auto const nBlocks  = ceilDiv( mnElementsInGroup[ iSpecies ], nThreads );
+        /* @todo each species can calculate in parallel */
+        kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+            mPolymerSystemSortedOld         ->gpu + viSubGroupOffsets[ iSpecies ],
+            mPolymerSystemSorted            ->gpu + viSubGroupOffsets[ iSpecies ],
+            mviPolymerSystemSortedVirtualBox->gpu + viSubGroupOffsets[ iSpecies ],
+            mnElementsInGroup[ iSpecies ]
+        );
+    }
+    mPolymerSystemSorted            ->pop();
+    mviPolymerSystemSortedVirtualBox->pop();
+#endif
+    if ( mLog.isActive( "Benchmark" ) )
+    {
+        // https://devblogs.nvidia.com/how-implement-performance-metrics-cuda-cc/#disqus_thread
+        cudaEventRecord( tOverflowCheck1, mStream );
+        cudaEventSynchronize( tOverflowCheck1 );  // basically a StreamSynchronize
+        float milliseconds = 0;
+        cudaEventElapsedTime( & milliseconds, tOverflowCheck0, tOverflowCheck1 );
+        std::stringstream sBuffered;
+        sBuffered << "tOverflowCheck = " << milliseconds / 1000. << "s\n";
+        mLog( "Benchmark" ) << sBuffered.str();
+    }
 
     /* untangle reordered array so that LeMonADE can use it again */
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
