@@ -1921,26 +1921,25 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         auto const y = mPolymerSystem.at( 4*i+1 );
         auto const z = mPolymerSystem.at( 4*i+2 );
 
-        auto const pTarget  = &mPolymerSystemSorted            ->host[ miToiNew[i] ];
-        auto const pTarget2 = &mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
-
         mPolymerSystem.at( 4*i+0 ) = x & mBoxXM1;
         mPolymerSystem.at( 4*i+1 ) = y & mBoxYM1;
         mPolymerSystem.at( 4*i+2 ) = z & mBoxZM1;
 
-        pTarget->x = x & mBoxXM1;
-        pTarget->y = y & mBoxYM1;
-        pTarget->z = z & mBoxZM1;
-        pTarget->w = mNeighbors[i].size;
+        mPolymerSystemSorted->host[ miToiNew[i] ].x = x & mBoxXM1;
+        mPolymerSystemSorted->host[ miToiNew[i] ].y = y & mBoxYM1;
+        mPolymerSystemSorted->host[ miToiNew[i] ].z = z & mBoxZM1;
+        mPolymerSystemSorted->host[ miToiNew[i] ].w = mNeighbors[i].size;
 
-        pTarget2->x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
-        pTarget2->y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
-        pTarget2->z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+        mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ].z = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
 
-        mviPolymerSystemVirtualBox.at( 4*i+0 ) = pTarget2->x;
-        mviPolymerSystemVirtualBox.at( 4*i+1 ) = pTarget2->y;
-        mviPolymerSystemVirtualBox.at( 4*i+2 ) = pTarget2->z;
+        mviPolymerSystemVirtualBox.at( 4*i+0 ) = ( x - ( x & mBoxXM1 ) ) / mBoxX;
+        mviPolymerSystemVirtualBox.at( 4*i+1 ) = ( y - ( y & mBoxYM1 ) ) / mBoxY;
+        mviPolymerSystemVirtualBox.at( 4*i+2 ) = ( z - ( z & mBoxZM1 ) ) / mBoxZ;
 
+        auto const pTarget  = &mPolymerSystemSorted            ->host[ miToiNew[i] ];
+        auto const pTarget2 = &mviPolymerSystemSortedVirtualBox->host[ miToiNew[i] ];
         if ( ! ( ( (T_Coordinate) pTarget->x + (T_Coordinate) pTarget2->x * (T_Coordinate) mBoxX == x ) &&
                  ( (T_Coordinate) pTarget->y + (T_Coordinate) pTarget2->y * (T_Coordinate) mBoxY == y ) &&
                  ( (T_Coordinate) pTarget->z + (T_Coordinate) pTarget2->z * (T_Coordinate) mBoxZ == z )
