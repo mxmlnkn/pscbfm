@@ -1961,14 +1961,14 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     );
 
     /* mapping new (monomers spatially sorted) index to old (species sorted) index */
-    if ( miNewToiSpatial       == NULL ) miNewToiSpatial       = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
-    if ( mvKeysZOrderLinearIds == NULL ) mvKeysZOrderLinearIds = new MirroredVector< T_Id    >( mnMonomersPadded, mStream );
+    if ( miNewToiSpatial       == NULL ) miNewToiSpatial       = new MirroredVector< T_Id >( mnMonomersPadded, mStream );
+    if ( mvKeysZOrderLinearIds == NULL ) mvKeysZOrderLinearIds = new MirroredVector< T_Id >( mnMonomersPadded, mStream );
     assert( miNewToiSpatial       != NULL );
     assert( mvKeysZOrderLinearIds != NULL );
 
+    /* @see https://thrust.github.io/doc/group__transformations.html#ga233a3db0c5031023c8e9385acd4b9759
+       @see https://thrust.github.io/doc/group__transformations.html#ga281b2e453bfa53807eda1d71614fb504 */
     thrust::sequence( thrust::system::cuda::par, miNewToiSpatial->gpu, miNewToiSpatial->gpu + miNewToiSpatial->nElements );
-
-    /* @see https://thrust.github.io/doc/group__transformations.html#ga281b2e453bfa53807eda1d71614fb504 */
     thrust::transform( thrust::system::cuda::par,
         mPolymerSystemSorted ->gpu,
         mPolymerSystemSorted ->gpu + mPolymerSystemSorted->nElements,
@@ -1984,9 +1984,9 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
             miNewToiSpatial      ->gpu + mviSubGroupOffsets.at( iSpecies )
         );
     }
-    miNewToiSpatial->pop();
 
     #if 1
+    miNewToiSpatial->pop();
     /* apply the newly found sorting into the total map just like function composition */
     std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
     for ( T_Id iNew = 0u; iNew < miNewToiSpatial->nElements ; ++iNew )
@@ -2000,8 +2000,8 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         if ( miNewToi->host[ iNew ] != UINT32_MAX )
             miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
     }
-    miNewToi->push();
-    miToiNew->push();
+    miNewToi->pushAsync();
+    miToiNew->pushAsync();
     #else
     ...
     #endif
@@ -2047,7 +2047,6 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
     if ( mNeighborsSortedSizes == NULL ) mNeighborsSortedSizes = new MirroredVector< uint8_t >( mnMonomersPadded, mStream );
     assert( mNeighborsSorted      != NULL );
     assert( mNeighborsSortedSizes != NULL );
-    mNeighbors->pushAsync();
 
     if ( mLog.isActive( "Info" ) )
     {
@@ -2170,11 +2169,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         mviPolymerSystemSortedVirtualBox->memset( 0 );
     #endif
 
-#if false && defined( USE_GPU_FOR_OVERHEAD )
-    mPolymerSystem->push();
-    #if ! defined( USE_PERIODIC_MONOMER_SORTING )
-        miNewToi->push();
-    #endif
+#if defined( USE_GPU_FOR_OVERHEAD )
     auto const nThreads = 128;
     auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
     kernelSplitMonomerPositions<<< nBlocksP, nThreads, 0, mStream >>>(
@@ -2184,8 +2179,6 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         mPolymerSystemSorted            ->gpu,
         mnMonomersPadded
     );
-    mviPolymerSystemSortedVirtualBox->pop();
-    mPolymerSystemSorted            ->pop();
 #else
     mLog( "Info" ) << "[" << __FILENAME__ << "::initializeSortedMonomerPositions] sort mPolymerSystem -> mPolymerSystemSorted ...\n";
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
@@ -2508,14 +2501,6 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     if ( mStream == 0 )
         CUDA_ERROR( cudaStreamCreate( &mStream ) );
 
-    initializeBondTable();
-    initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
-    checkMonomerReorderMapping();
-    initializeSortedNeighbors();
-    initializeSortedMonomerPositions();
-    checkSystem();
-    initializeLattices();
-
     { decltype( dcBoxX      ) x = mBoxX     ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxX     , &x, sizeof(x) ) ); }
     { decltype( dcBoxY      ) x = mBoxY     ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxY     , &x, sizeof(x) ) ); }
     { decltype( dcBoxZ      ) x = mBoxZ     ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZ     , &x, sizeof(x) ) ); }
@@ -2524,6 +2509,19 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     { decltype( dcBoxZM1    ) x = mBoxZM1   ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxZM1   , &x, sizeof(x) ) ); }
     { decltype( dcBoxXLog2  ) x = mBoxXLog2 ; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXLog2 , &x, sizeof(x) ) ); }
     { decltype( dcBoxXYLog2 ) x = mBoxXYLog2; CUDA_ERROR( cudaMemcpyToSymbol( dcBoxXYLog2, &x, sizeof(x) ) ); }
+
+    #if defined( USE_GPU_FOR_OVERHEAD )
+        mPolymerSystem->pushAsync();
+        mNeighbors    ->pushAsync();
+    #endif
+
+    initializeBondTable();
+    initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
+    checkMonomerReorderMapping();
+    initializeSortedNeighbors();
+    initializeSortedMonomerPositions();
+    checkSystem();
+    initializeLattices();
 
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
     CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
@@ -2713,7 +2711,23 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
      * the only way for jumps to happen is because of type overflows.
      */
 
-#if defined( DO_OVERFLOW_CHECK_ON_HOST )
+#if defined( USE_GPU_FOR_OVERHEAD )
+    auto const nThreads = 128;
+    auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
+    /* the padding values do not change, so we can simply let the threads
+     * calculate them without worries and save the loop over the species */
+    kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+        mPolymerSystemSortedOld         ->gpu,
+        mPolymerSystemSorted            ->gpu,
+        mviPolymerSystemSortedVirtualBox->gpu,
+        mnMonomersPadded
+    );
+    if ( copyToHost )
+    {
+        mPolymerSystemSorted            ->pop();
+        mviPolymerSystemSortedVirtualBox->pop();
+    }
+#else
     mPolymerSystemSorted            ->popAsync();
     mviPolymerSystemSortedVirtualBox->popAsync();
     CUDA_ERROR( cudaStreamSynchronize( mStream ) );
@@ -2759,22 +2773,6 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
         mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z = iv[2];
     }
     mviPolymerSystemSortedVirtualBox->pushAsync();
-#else
-    auto const nThreads = 128;
-    auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
-    /* the padding values do not change, so we can simply let the threads
-     * calculate them without worries and save the loop over the species */
-    kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
-        mPolymerSystemSortedOld         ->gpu,
-        mPolymerSystemSorted            ->gpu,
-        mviPolymerSystemSortedVirtualBox->gpu,
-        mnMonomersPadded
-    );
-    if ( copyToHost )
-    {
-        mPolymerSystemSorted            ->pop();
-        mviPolymerSystemSortedVirtualBox->pop();
-    }
 #endif
 }
 
@@ -3361,9 +3359,10 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
         }
     }
 
-    #if defined( USE_PERIODIC_MONOMER_SORTING )
-        miNewToi->pop();
-        miToiNew->pop();
+    #if defined( USE_PERIODIC_MONOMER_SORTING ) && ! defined( USE_GPU_FOR_OVERHEAD )
+        miNewToi->popAsync();
+        miToiNew->popAsync(); /* needed for findAndRemoveOverflows, but only if USE_GPU_FOR_OVERHEAD not set */
+        CUDA_ERROR( cudaStreamSynchronize( mStream ) );
         checkMonomerReorderMapping();
     #endif
 
