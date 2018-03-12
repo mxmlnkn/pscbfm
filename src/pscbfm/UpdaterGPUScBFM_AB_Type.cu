@@ -21,6 +21,7 @@
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
 #   define USE_NBUFFERED_TMP_LATTICE
 #endif
+//#define USE_PERIODIC_MONOMER_SORTING
 
 
 /**
@@ -1980,6 +1981,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     }
     miNewToiSpatial->pop();
 
+    #if 1
     /* apply the newly found sorting into the total map just like function composition */
     std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
     for ( T_Id iNew = 0u; iNew < miNewToiSpatial->nElements ; ++iNew )
@@ -1995,6 +1997,9 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     }
     miNewToi->push();
     miToiNew->push();
+    #else
+    ...
+    #endif
 
     for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
     {
@@ -2023,47 +2028,6 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
 
     CUDA_ERROR( cudaMemcpyAsync( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice, mStream ) );
 }
-
-void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
-{
-    /* sort monomers spatially to increase texture cache hit rates for the lattice lookup even more ... ... */
-    std::vector< T_Id > iNewToiSpatial( mnMonomersPadded ); /* mapping new (monomers spatially sorted) index to old (species sorted) index */
-    thrust::sequence( thrust::host, iNewToiSpatial.begin(), iNewToiSpatial.end() );
-
-    std::vector< T_Id > vKeysZOrderLinearIds( mnMonomersPadded, UINT32_MAX );
-    for ( T_Id iOld = 0u; iOld < mnAllMonomers; ++iOld )
-    {
-        vKeysZOrderLinearIds.at( miToiNew->host[ iOld ] ) = linearizeBoxVectorIndex(
-            mPolymerSystem->host[ iOld ].x,
-            mPolymerSystem->host[ iOld ].y,
-            mPolymerSystem->host[ iOld ].z
-        );
-    }
-    /* sort per sublists (each species) by key, not the whole list */
-    for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
-    {
-        thrust::sort_by_key( thrust::host,
-            vKeysZOrderLinearIds.begin() + mviSubGroupOffsets.at( iSpecies ),
-            vKeysZOrderLinearIds.begin() + mviSubGroupOffsets.at( iSpecies ) + mnElementsInGroup.at( iSpecies ),
-            iNewToiSpatial      .begin() + mviSubGroupOffsets.at( iSpecies )
-        );
-    }
-
-    /* apply the newly found sorting into the total map just like function composition */
-    std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
-    for ( T_Id iNew = 0u; iNew < iNewToiSpatial.size() ; ++iNew )
-        iNewToiComposition.at( iNew ) = miNewToi->host[ iNewToiSpatial.at( iNew ) ];
-    std::memcpy( miNewToi->host, &iNewToiComposition[0], miNewToi->nBytes );
-
-    /* create/update convenience reverse mapping */
-    thrust::fill( thrust::host, miToiNew->host, miToiNew->host + miToiNew->nElements, UINT32_MAX );
-    for ( auto iNew = 0u; iNew < miNewToi->nElements; ++iNew )
-    {
-        if ( miNewToi->host[ iNew ] != UINT32_MAX )
-            miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
-    }
-}
-#endif
 
 void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
 {
@@ -2229,6 +2193,10 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
     }
     mPolymerSystemSorted            ->pushAsync();
     mviPolymerSystemSortedVirtualBox->pushAsync();
+    #if defined( USE_PERIODIC_MONOMER_SORTING )
+        miNewToi->pushAsync();
+        miToiNew->pushAsync();
+    #endif
 }
 
 void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
@@ -2507,15 +2475,6 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
 
     initializeBondTable();
     initializeSpeciesSorting(); /* using miNewToi and miToiNew the monomers are mapped to be sorted by species */
-    checkMonomerReorderMapping();
-    auto const tSpatialSorting0 = std::chrono::high_resolution_clock::now();
-    initializeSpatialSorting();
-    {
-        auto const tSpatialSorting1 = std::chrono::high_resolution_clock::now();
-        std::stringstream sBuffered;
-        sBuffered << "tSpatialSorting = " << std::chrono::duration<double>( tSpatialSorting1 - tSpatialSorting0 ).count() << "s\n";
-        mLog( "Benchmark" ) << sBuffered.str();
-    }
     checkMonomerReorderMapping();
     initializeSortedNeighbors();
     initializeSortedMonomerPositions();
@@ -3005,6 +2964,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     /* run simulation */
     for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep )
     {
+        #if defined( USE_PERIODIC_MONOMER_SORTING )
         if ( iStep % 100 == 0 )
         {
             if ( mLog.isActive( "Benchmark" ) )
@@ -3023,6 +2983,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mLog( "Benchmark" ) << sBuffered.str();
             }
         }
+        #endif
 
         #if defined( USE_UINT8_POSITIONS )
             /**
@@ -3364,6 +3325,12 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
             throw std::runtime_error( msg.str() );
         }
     }
+
+    #if defined( USE_PERIODIC_MONOMER_SORTING )
+        miNewToi->push();
+        miToiNew->push();
+        checkMonomerReorderMapping();
+    #endif
 
     #if defined( USE_UINT8_POSITIONS )
         cudaEvent_t tOverflowCheck0, tOverflowCheck1;
