@@ -22,7 +22,7 @@
 #   define USE_NBUFFERED_TMP_LATTICE
 #endif
 //#define USE_PERIODIC_MONOMER_SORTING
-//#define USE_GPU_FOR_OVERHEAD
+#define USE_GPU_FOR_OVERHEAD
 
 
 /**
@@ -1801,7 +1801,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
         mLog( "Info" ) << "}\n";
     }
 
-    #if defined( USE_PERIODIC_MONOMER_SORTING )
+    #if defined( USE_PERIODIC_MONOMER_SORTING ) || defined( USE_GPU_FOR_OVERHEAD )
         miNewToi->pushAsync();
         miToiNew->pushAsync();
     #endif
@@ -2076,12 +2076,12 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
     }
 
 
-#if 0
+#if defined( USE_GPU_FOR_OVERHEAD )
     auto const nThreads = 128;
     auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
     for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
     {
-        kernelApplyMappingToNeighbors<<< nBlocksP, nThreads >>>(
+        kernelApplyMappingToNeighbors<<< nBlocksP, nThreads, 0, mStream >>>(
             mNeighbors           ->gpu,
             miNewToi             ->gpu + mviSubGroupOffsets[ iSpecies ],
             miToiNew             ->gpu,
@@ -2170,8 +2170,11 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         mviPolymerSystemSortedVirtualBox->memset( 0 );
     #endif
 
-#if 0
+#if false && defined( USE_GPU_FOR_OVERHEAD )
     mPolymerSystem->push();
+    #if ! defined( USE_PERIODIC_MONOMER_SORTING )
+        miNewToi->push();
+    #endif
     auto const nThreads = 128;
     auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
     kernelSplitMonomerPositions<<< nBlocksP, nThreads, 0, mStream >>>(
@@ -2181,8 +2184,8 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         mPolymerSystemSorted            ->gpu,
         mnMonomersPadded
     );
-    mPolymerSystemSorted            ->pop();
     mviPolymerSystemSortedVirtualBox->pop();
+    mPolymerSystemSorted            ->pop();
 #else
     mLog( "Info" ) << "[" << __FILENAME__ << "::initializeSortedMonomerPositions] sort mPolymerSystem -> mPolymerSystemSorted ...\n";
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
@@ -2997,7 +3000,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep )
     {
         #if defined( USE_PERIODIC_MONOMER_SORTING )
-        if ( iStep % 100 == 0 )
+        if ( iStep % 500 == 0 )
         {
             if ( mLog.isActive( "Benchmark" ) )
                 cudaEventRecord( tSort0, mStream );
@@ -3359,8 +3362,8 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
     }
 
     #if defined( USE_PERIODIC_MONOMER_SORTING )
-        miNewToi->push();
-        miToiNew->push();
+        miNewToi->pop();
+        miToiNew->pop();
         checkMonomerReorderMapping();
     #endif
 
@@ -3388,7 +3391,7 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
         }
     #endif
 
-#if 0
+#if defined( USE_GPU_FOR_OVERHEAD )
     auto const nThreads = 128;
     auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
     kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
