@@ -274,7 +274,7 @@ public:
         T_Id neighborIds[ MAX_CONNECTIVITY ];
     };
 private:
-    std::vector< MonomerEdges > mNeighbors;
+    MirroredVector< MonomerEdges > * mNeighbors;
     /**
      * stores the IDs of all neighbors as is needed to check for the bond
      * set / length restrictions.
@@ -323,6 +323,15 @@ private:
     MirroredVector < T_Id    > * mNeighborsSorted;
     MirroredVector < uint8_t > * mNeighborsSortedSizes;
     AlignedMatrices< T_Id    >   mNeighborsSortedInfo;
+    /**
+     * Difficult to merge this with mNeighbors as MirroredVector does not
+     * support too complicated data structures, i.e. we can't use MonomerEdges
+     * which in turn means we would have to do everything manually, especially
+     * changing the call to the graphColoring would be difficult and so on ...
+     * This is needed to recalculate mNeighborsSorted on GPU after resorting
+     * the monomers!
+     */
+    MirroredVector < T_Id   > * mNeighborsUnsorted;
 
     T_BoxSize mBoxX     ;
     T_BoxSize mBoxY     ;

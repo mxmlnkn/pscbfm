@@ -1512,8 +1512,9 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mPolymerFlags                    ( NULL ),
    miToiNew                         ( NULL ),
    miNewToi                         ( NULL ),
-   miNewToiSpatial                 ( NULL ),
+   miNewToiSpatial                  ( NULL ),
    mvKeysZOrderLinearIds            ( NULL ),
+   mNeighbors                       ( NULL ),
    mNeighborsSorted                 ( NULL ),
    mNeighborsSortedSizes            ( NULL ),
    mNeighborsSortedInfo             ( nBytesAlignment ),
@@ -1542,39 +1543,59 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
 }
 
 
-namespace {
-
-template< typename T >
-inline void deletePointer( T * & p )
+struct DeleteMirroredVector
 {
-    if ( p != NULL )
-    {
-        delete p;
-        p = NULL;
-    }
-}
+    size_t nBytesFreed = 0;
 
-}
+    template< typename S >
+    void operator()( MirroredVector< S > * & p, std::string const & name = "" )
+    {
+        if ( p != NULL )
+        {
+            //std::cerr << "Free MirroredVector " << name << " at " << (void*) p;
+            nBytesFreed += p->nBytes;
+            //std::cerr << " which holds " << p->nBytes;
+            delete p;
+            p = NULL;
+            //std::cerr << "\n";
+        }
+    }
+
+    template< typename S >
+    void operator()( MirroredTexture< S > * & p, std::string const & name = "" )
+    {
+        if ( p != NULL )
+        {
+            nBytesFreed += p->nBytes;
+            delete p;
+            p = NULL;
+        }
+    }
+};
 
 /**
  * Deletes everything which could and is allocated
  */
 void UpdaterGPUScBFM_AB_Type::destruct()
 {
-    deletePointer( mLatticeOut                      );
-    deletePointer( mLatticeTmp                      );
-    deletePointer( mLatticeTmp2                     );
-    deletePointer( mPolymerSystem                   );
-    deletePointer( mPolymerSystemSorted             );
-    deletePointer( mPolymerSystemSortedOld          );
-    deletePointer( mviPolymerSystemSortedVirtualBox );
-    deletePointer( mPolymerFlags                    );
-    deletePointer( miToiNew                         );
-    deletePointer( miNewToi                         );
-    deletePointer( miNewToiSpatial                 );
-    deletePointer( mvKeysZOrderLinearIds            );
-    deletePointer( mNeighborsSorted                 );
-    deletePointer( mNeighborsSortedSizes            );
+    DeleteMirroredVector deletePointer;
+    deletePointer( mLatticeOut                     , "mLatticeOut"                      );
+    deletePointer( mLatticeOut                     , "mLatticeOut"                      );
+    deletePointer( mLatticeTmp                     , "mLatticeTmp"                      );
+    deletePointer( mLatticeTmp2                    , "mLatticeTmp2"                     );
+    deletePointer( mPolymerSystem                  , "mPolymerSystem"                   );
+    deletePointer( mPolymerSystemSorted            , "mPolymerSystemSorted"             );
+    deletePointer( mPolymerSystemSortedOld         , "mPolymerSystemSortedOld"          );
+    deletePointer( mviPolymerSystemSortedVirtualBox, "mviPolymerSystemSortedVirtualBox" );
+    deletePointer( mPolymerFlags                   , "mPolymerFlags"                    );
+    deletePointer( miToiNew                        , "miToiNew"                         );
+    deletePointer( miNewToi                        , "miNewToi"                         );
+    deletePointer( miNewToiSpatial                 , "miNewToiSpatial"                  );
+    deletePointer( mvKeysZOrderLinearIds           , "mvKeysZOrderLinearIds"            );
+    deletePointer( mNeighbors                      , "mNeighbors"                       );
+    deletePointer( mNeighborsSorted                , "mNeighborsSorted"                 );
+    deletePointer( mNeighborsSortedSizes           , "mNeighborsSortedSizes"            );
+    mLog( "Info" ) << "Freed a total of " << prettyPrintBytes( deletePointer.nBytesFreed ) << " on GPU and host RAM.\n";
 }
 
 UpdaterGPUScBFM_AB_Type::~UpdaterGPUScBFM_AB_Type()
@@ -1663,7 +1684,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
    mLog( "Info" ) << "Coloring graph ...\n";
     bool const bUniformColors = true; // setting this to true should yield more performance as the kernels are uniformly utilized
     mGroupIds = graphColoring< MonomerEdges const *, T_Id, T_Color >(
-        &mNeighbors[0], mNeighbors.size(), bUniformColors,
+        mNeighbors->host, mNeighbors->nElements, bUniformColors,
         []( MonomerEdges const * const & x, T_Id const & i ){ return x[i].size; },
         []( MonomerEdges const * const & x, T_Id const & i, size_t const & j ){ return x[i].neighborIds[j]; }
     );
@@ -1804,11 +1825,11 @@ __global__ void kernelApplyMapping
         }
         if ( miNewToi->host[i] >= mnAllMonomers )
             continue;
-        mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi->host[i] ].size;
+        mNeighborsSortedSizes->host[i] = mNeighbors->host[ miNewToi->host[i] ].size;
         auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-        for ( size_t j = 0u; j < mNeighbors[  miNewToi->host[i] ].size; ++j )
+        for ( size_t j = 0u; j < mNeighbors->host[ miNewToi->host[i] ].size; ++j )
         {
-            mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ];
+            mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors->host[ miNewToi->host[i] ].neighborIds[j] ];
         }
     }
     /* apply sorting to the total map, just like function composition */
@@ -1985,11 +2006,11 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
                 ++iSpecies;
             if ( miNewToi->host[i] >= mnAllMonomers )
                 continue;
-            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi->host[i] ].size;
+            mNeighborsSortedSizes->host[i] = mNeighbors->host[ miNewToi->host[i] ].size;
             auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-            for ( size_t j = 0u; j < mNeighbors[  miNewToi->host[i] ].size; ++j )
+            for ( size_t j = 0u; j < mNeighbors->host[  miNewToi->host[i] ].size; ++j )
             {
-                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ];
+                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors->host[ miNewToi->host[i] ].neighborIds[j] ];
             }
         }
     }
@@ -2070,6 +2091,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
     assert( mNeighborsSortedSizes != NULL );
     mNeighborsSorted     ->memset(0);
     mNeighborsSortedSizes->memset(0);
+    mNeighbors->pushAsync();
 
     if ( mLog.isActive( "Info" ) )
     {
@@ -2114,15 +2136,15 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
             if ( miNewToi->host[i] >= mnAllMonomers )
                 continue;
             /* actually to the sorting / copying and conversion */
-            mNeighborsSortedSizes->host[i] = mNeighbors[ miNewToi->host[i] ].size;
+            mNeighborsSortedSizes->host[i] = mNeighbors->host[ miNewToi->host[i] ].size;
             auto const pitch = mNeighborsSortedInfo.getMatrixPitchElements( iSpecies );
-            for ( size_t j = 0u; j < mNeighbors[  miNewToi->host[i] ].size; ++j )
+            for ( size_t j = 0u; j < mNeighbors->host[  miNewToi->host[i] ].size; ++j )
             {
                 if ( i < 5 || std::abs( (long long int) i - mviSubGroupOffsets[ mviSubGroupOffsets.size()-1 ] ) < 5 )
                 {
-                    mLog( "Info" ) << "Currently at index " << i << ": Writing into mNeighborsSorted->host[ " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " + " << j << " * " << pitch << " + " << i << "-" << mviSubGroupOffsets[ iSpecies ] << "] the value of old neighbor located at miToiNew->host[ mNeighbors[ miNewToi->host[i]=" << miNewToi->host[i] << " ] = miToiNew->host[ " << mNeighbors[ miNewToi->host[i] ].neighborIds[j] << " ] = " << miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ] << " \n";
+                    mLog( "Info" ) << "Currently at index " << i << ": Writing into mNeighborsSorted->host[ " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " + " << j << " * " << pitch << " + " << i << "-" << mviSubGroupOffsets[ iSpecies ] << "] the value of old neighbor located at miToiNew->host[ mNeighbors[ miNewToi->host[i]=" << miNewToi->host[i] << " ] = miToiNew->host[ " << mNeighbors->host[ miNewToi->host[i] ].neighborIds[j] << " ] = " << miToiNew->host[ mNeighbors->host[ miNewToi->host[i] ].neighborIds[j] ] << " \n";
                 }
-                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors[ miNewToi->host[i] ].neighborIds[j] ];
+                mNeighborsSorted->host[ mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) + j * pitch + ( i - mviSubGroupOffsets[ iSpecies ] ) ] = miToiNew->host[ mNeighbors->host[ miNewToi->host[i] ].neighborIds[j] ];
                 //mNeighborsSorted->host[ miToiNew->host[i] ].neighborIds[j] = miToiNew->host[ mNeighbors[i].neighborIds[j] ];
             }
         }
@@ -2153,12 +2175,12 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
          * to create the property tag */
         for ( T_Id i = 0; i < mnAllMonomers; ++i )
         {
-            if ( mNeighbors[i].size > MAX_CONNECTIVITY )
+            if ( mNeighbors->host[i].size > MAX_CONNECTIVITY )
             {
                 std::stringstream msg;
                 msg << "[" << __FILENAME__ << "::initializeSortedNeighbors] "
                     << "This implementation allows max. 7 neighbors per monomer, "
-                    << "but monomer " << i << " has " << mNeighbors[i].size << "\n";
+                    << "but monomer " << i << " has " << mNeighbors->host[i].size << "\n";
                 mLog( "Error" ) << msg.str();
                 throw std::invalid_argument( msg.str() );
             }
@@ -2195,7 +2217,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         mPolymerSystemSorted->host[ miToiNew->host[i] ].x = x & mBoxXM1;
         mPolymerSystemSorted->host[ miToiNew->host[i] ].y = y & mBoxYM1;
         mPolymerSystemSorted->host[ miToiNew->host[i] ].z = z & mBoxZM1;
-        mPolymerSystemSorted->host[ miToiNew->host[i] ].w = mNeighbors[i].size;
+        mPolymerSystemSorted->host[ miToiNew->host[i] ].w = mNeighbors->host[i].size;
 
         mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].x = ( x - ( x & mBoxXM1 ) ) / mBoxX;
         mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].y = ( y - ( y & mBoxYM1 ) ) / mBoxY;
@@ -2551,9 +2573,9 @@ void UpdaterGPUScBFM_AB_Type::setNrOfAllMonomers( T_Id const rnAllMonomers )
 
     mnAllMonomers = rnAllMonomers;
     mAttributeSystem.resize( mnAllMonomers   );
-    mNeighbors      .resize( mnAllMonomers   );
+    mNeighbors     = new MirroredVector< MonomerEdges  >( mnAllMonomers );
     mPolymerSystem = new MirroredVector< T_Coordinates >( mnAllMonomers );
-    std::memset( &mNeighbors[0], 0, mNeighbors.size() * sizeof( mNeighbors[0] ) );
+    std::memset( mNeighbors->host, 0, mNeighbors->nBytes );
 }
 
 void UpdaterGPUScBFM_AB_Type::setPeriodicity
@@ -2628,7 +2650,7 @@ void UpdaterGPUScBFM_AB_Type::setConnectivity
 {
     /* @todo add check whether the bond already exists */
     /* Could also add the inversio, but the bonds are a non-directional graph */
-    auto const iNew = mNeighbors[ iMonomer1 ].size++;
+    auto const iNew = mNeighbors->host[ iMonomer1 ].size++;
     if ( iNew > MAX_CONNECTIVITY-1 )
     {
         std::stringstream msg;
@@ -2637,7 +2659,7 @@ void UpdaterGPUScBFM_AB_Type::setConnectivity
             << ") has been exceeded!\n";
         throw std::invalid_argument( msg.str() );
     }
-    mNeighbors[ iMonomer1 ].neighborIds[ iNew ] = iMonomer2;
+    mNeighbors->host[ iMonomer1 ].neighborIds[ iNew ] = iMonomer2;
 }
 
 void UpdaterGPUScBFM_AB_Type::setLatticeSize
@@ -2855,11 +2877,11 @@ void UpdaterGPUScBFM_AB_Type::checkSystem() const
      * bond set
      */
     for ( T_Id i = 0; i < mnAllMonomers; ++i )
-    for ( unsigned iNeighbor = 0; iNeighbor < mNeighbors[i].size; ++iNeighbor )
+    for ( unsigned iNeighbor = 0; iNeighbor < mNeighbors->host[i].size; ++iNeighbor )
     {
         /* calculate the bond vector between the neighbor and this particle
          * neighbor - particle = ( dx, dy, dz ) */
-        auto const neighbor = mPolymerSystem->host[ mNeighbors[i].neighborIds[ iNeighbor ] ];
+        auto const neighbor = mPolymerSystem->host[ mNeighbors->host[i].neighborIds[ iNeighbor ] ];
         auto dx = (int) neighbor.x - (int) mPolymerSystem->host[i].x;
         auto dy = (int) neighbor.y - (int) mPolymerSystem->host[i].y;
         auto dz = (int) neighbor.z - (int) mPolymerSystem->host[i].z;
@@ -2893,7 +2915,7 @@ void UpdaterGPUScBFM_AB_Type::checkSystem() const
                 << i << " at (" << mPolymerSystem->host[i].x << ","
                                 << mPolymerSystem->host[i].y << ","
                                 << mPolymerSystem->host[i].z << ") and monomer "
-                << mNeighbors[i].neighborIds[ iNeighbor ] << " at ("
+                << mNeighbors->host[i].neighborIds[ iNeighbor ] << " at ("
                 << neighbor.x << "," << neighbor.y << "," << neighbor.z << ")"
                 << std::endl;
              throw std::runtime_error( msg.str() );
