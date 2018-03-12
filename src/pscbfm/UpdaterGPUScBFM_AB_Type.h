@@ -160,6 +160,8 @@ private:
     cudaStream_t mStream;
 
     RandomNumberGenerators randomNumbers;
+    int64_t mAge;
+    int64_t mnStepsBetweenSortings;
 
     bool mForbiddenBonds[512];
     //int BondAsciiArray[512];
@@ -251,6 +253,7 @@ private:
     std::vector< T_Id    > mviSubGroupOffsets; /* stores offsets (in number of elements not bytes) to each aligned subgroup vector in mPolymerSystemSorted */
     MirroredVector< T_Id > * miToiNew; /* for each old monomer stores the new position */
     MirroredVector< T_Id > * miNewToi; /* for each new monomer stores the old position */
+    MirroredVector< T_Id > * miNewToiComposition; /* temporary buffer for storing result of miNewToi[ miNewToiSpatial ] */
     MirroredVector< T_Id > * miNewToiSpatial; /* used for sorting monomers along z-curve on GPU */
     MirroredVector< T_Id > * mvKeysZOrderLinearIds; /* used for sorting monomers along z-curve on GPU */
 
@@ -417,6 +420,13 @@ public:
     int32_t getMonomerPositionInZ( T_Id i );
 
     void setPeriodicity( bool isPeriodicX, bool isPeriodicY, bool isPeriodicZ );
+    inline void    setAge( int64_t rAge ){ mAge = rAge; }
+    inline int64_t getAge( void ) const{ return mAge; }
+    /* this is a performance feature, but one which also changes the order
+     * in which random numbers are generated making binary comparisons of
+     * the results moot */
+    inline void    setStepsBetweenSortings( int64_t rnStepsBetweenSortings ){ assert( rnStepsBetweenSortings > 0 ); mnStepsBetweenSortings = rnStepsBetweenSortings; }
+    inline int64_t getStepsBetweenSortings( void ) const{ return mnStepsBetweenSortings; }
 
     /* for benchmarking purposes */
     std::chrono::time_point< std::chrono::high_resolution_clock > mtCopyBack0;

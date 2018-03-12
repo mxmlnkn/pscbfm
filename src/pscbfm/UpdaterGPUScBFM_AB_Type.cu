@@ -15,13 +15,12 @@
 //#define USE_MOORE_CURVE_FOR_LATTICE
 #define USE_UINT8_POSITIONS
 #ifdef USE_UINT8_POSITIONS
-//#   define DO_OVERFLOW_CHECK_ON_HOST // only has a use with USE_UINT8_POSITIONS set
 #endif
 //#define USE_DOUBLE_BUFFERED_TMP_LATTICE
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
 #   define USE_NBUFFERED_TMP_LATTICE
 #endif
-//#define USE_PERIODIC_MONOMER_SORTING
+#define USE_PERIODIC_MONOMER_SORTING
 #define USE_GPU_FOR_OVERHEAD
 
 
@@ -1502,6 +1501,8 @@ UpdaterGPUScBFM_AB_Type::T_Id UpdaterGPUScBFM_AB_Type::linearizeBoxVectorIndex
 
 UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
  : mStream                          ( 0    ),
+   mAge                             ( 0    ),
+   mnStepsBetweenSortings           ( 5000 ),
    mLatticeOut                      ( NULL ),
    mLatticeTmp                      ( NULL ),
    mLatticeTmp2                     ( NULL ),
@@ -1514,6 +1515,7 @@ UpdaterGPUScBFM_AB_Type::UpdaterGPUScBFM_AB_Type()
    mPolymerFlags                    ( NULL ),
    miToiNew                         ( NULL ),
    miNewToi                         ( NULL ),
+   miNewToiComposition              ( NULL ),
    miNewToiSpatial                  ( NULL ),
    mvKeysZOrderLinearIds            ( NULL ),
    mNeighbors                       ( NULL ),
@@ -1592,6 +1594,7 @@ void UpdaterGPUScBFM_AB_Type::destruct()
     deletePointer( mPolymerFlags                   , "mPolymerFlags"                    );
     deletePointer( miToiNew                        , "miToiNew"                         );
     deletePointer( miNewToi                        , "miNewToi"                         );
+    deletePointer( miNewToiComposition             , "miNewToiComposition"              );
     deletePointer( miNewToiSpatial                 , "miNewToiSpatial"                  );
     deletePointer( mvKeysZOrderLinearIds           , "mvKeysZOrderLinearIds"            );
     deletePointer( mNeighbors                      , "mNeighbors"                       );
@@ -1810,6 +1813,25 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
 using MonomerEdges = UpdaterGPUScBFM_AB_Type::MonomerEdges;
 
 /**
+ * Calculates mapping BtoA from AtoB mapping
+ */
+__global__ void kernelInvertMapping
+(
+    T_Id         const * const dpiNewToi      ,
+    T_Id               * const dpiToiNew      ,
+    T_Id                 const nMonomersPadded
+)
+{
+    for ( auto iNew = blockIdx.x * blockDim.x + threadIdx.x;
+          iNew < nMonomersPadded; iNew += gridDim.x * blockDim.x )
+    {
+        auto const iOld = dpiNewToi[ iNew ];
+        if ( iOld != UINT32_MAX )
+            dpiToiNew[ iOld ] = iNew;
+    }
+}
+
+/**
  * needs to be called for each species
  */
 __global__ void kernelApplyMappingToNeighbors
@@ -1839,14 +1861,6 @@ __global__ void kernelApplyMappingToNeighbors
                 dpiToiNew[ dpNeighbors[ iOld ].neighborIds[ j ] ];
         }
     }
-
-#if 0
-    /* apply sorting to the total map, just like function composition */
-    std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
-    for ( T_Id iNew = 0u; iNew < miNewToiSpatial.size() ; ++iNew )
-        iNewToiComposition.at( iNew ) = miNewToi->host[ miNewToiSpatial.at( iNew ] );
-    miNewToi = iNewToiComposition;
-#endif
 }
 
 __global__ void kernelUndoPolymerSystemSorting
@@ -1951,6 +1965,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     }
     #endif
 
+    /* dependent on kernelTreatOverflows */
     kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
     (
         mPolymerSystemSorted            ->gpu,
@@ -1961,14 +1976,18 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     );
 
     /* mapping new (monomers spatially sorted) index to old (species sorted) index */
+    if ( miNewToiComposition   == NULL ) miNewToiComposition   = new MirroredVector< T_Id >( mnMonomersPadded, mStream );
     if ( miNewToiSpatial       == NULL ) miNewToiSpatial       = new MirroredVector< T_Id >( mnMonomersPadded, mStream );
     if ( mvKeysZOrderLinearIds == NULL ) mvKeysZOrderLinearIds = new MirroredVector< T_Id >( mnMonomersPadded, mStream );
+    assert( miNewToiComposition   != NULL );
     assert( miNewToiSpatial       != NULL );
     assert( mvKeysZOrderLinearIds != NULL );
 
     /* @see https://thrust.github.io/doc/group__transformations.html#ga233a3db0c5031023c8e9385acd4b9759
        @see https://thrust.github.io/doc/group__transformations.html#ga281b2e453bfa53807eda1d71614fb504 */
+    /* not dependent on anything, could run in different stream */
     thrust::sequence( thrust::system::cuda::par, miNewToiSpatial->gpu, miNewToiSpatial->gpu + miNewToiSpatial->nElements );
+    /* dependent on above, but does not depend on kernelUndoPolymerSystemSorting */
     thrust::transform( thrust::system::cuda::par,
         mPolymerSystemSorted ->gpu,
         mPolymerSystemSorted ->gpu + mPolymerSystemSorted->nElements,
@@ -1985,27 +2004,22 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         );
     }
 
-    #if 1
-    miNewToiSpatial->pop();
-    /* apply the newly found sorting into the total map just like function composition */
-    std::vector< T_Id > iNewToiComposition( miNewToi->nElements, UINT32_MAX );
-    for ( T_Id iNew = 0u; iNew < miNewToiSpatial->nElements ; ++iNew )
-        iNewToiComposition.at( iNew ) = miNewToi->host[ miNewToiSpatial->host[ iNew ] ];
-    std::memcpy( miNewToi->host, &iNewToiComposition[0], miNewToi->nBytes );
-
-    /* create/update convenience reverse mapping */
-    thrust::fill( thrust::host, miToiNew->host, miToiNew->host + miToiNew->nElements, UINT32_MAX );
-    for ( auto iNew = 0u; iNew < miNewToi->nElements; ++iNew )
-    {
-        if ( miNewToi->host[ iNew ] != UINT32_MAX )
-            miToiNew->host[ miNewToi->host[ iNew ] ] = iNew;
-    }
-    miNewToi->pushAsync();
-    miToiNew->pushAsync();
-    #else
-    ...
-    #endif
-
+    thrust::fill( thrust::system::cuda::par, miNewToiComposition->gpu, miNewToiComposition->gpu + miNewToiComposition->nElements, UINT32_MAX );
+    /**
+     * @see https://thrust.github.io/doc/group__gathering.html#ga86722e76264fb600d659c1adef5d51b2
+     *   -> for ( it : map ) result[ it - map_first ] = input_first[ *it ]
+     *   -> for ( i ) result[i] = input_first[ map[i] ]
+     * for ( T_Id iNew = 0u; iNew < miNewToiSpatial->nElements ; ++iNew )
+     *     iNewToiComposition.at( iNew ) = miNewToi->host[ miNewToiSpatial->host[ iNew ] ];
+     */
+    thrust::gather( thrust::system::cuda::par,
+        miNewToiSpatial   ->gpu,
+        miNewToiSpatial   ->gpu + miNewToiSpatial->nElements,
+        miNewToi          ->gpu,
+        miNewToiComposition->gpu
+    );
+    std::swap( miNewToi->gpu, miNewToiComposition->gpu ); // avoiding memcpy by swapping pointers on GPU
+    kernelInvertMapping<<< nBlocksP, nThreads >>>( miNewToi->gpu, miToiNew->gpu, miNewToi->nElements );
     for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
     {
         kernelApplyMappingToNeighbors<<< nBlocksP, nThreads, 0, mStream >>>(
@@ -2023,6 +2037,11 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
      * basically just avoids using two temporary arrays for the resorting of
      * mPolymerSystemSorted and mviPolymerSystemSortedVirtualBox */
 
+    /* dependent on:
+     *   kernelUndoPolymerSystemSorting (mPolymerSystem)
+     *   thrust::transform (mPolymerSystemSorted)
+     *   thrust::gather (miNewToi)
+     */
     kernelSplitMonomerPositions<<< nBlocksP, nThreads, 0, mStream >>>(
         mPolymerSystem                  ->gpu,
         miNewToi                        ->gpu,
@@ -2522,6 +2541,8 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
     initializeSortedMonomerPositions();
     checkSystem();
     initializeLattices();
+    if ( mAge != 0 )
+        doSpatialSorting();
 
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
     CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
@@ -2995,11 +3016,12 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
     }
 
     /* run simulation */
-    for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep )
+    for ( uint32_t iStep = 0; iStep < nMonteCarloSteps; ++iStep, ++mAge )
     {
         #if defined( USE_PERIODIC_MONOMER_SORTING )
-        if ( iStep % 500 == 0 )
+        if ( mAge % mnStepsBetweenSortings == 0 )
         {
+            mLog( "Info" ) << "Resorting at age / step " << mAge << "\n";
             if ( mLog.isActive( "Benchmark" ) )
                 cudaEventRecord( tSort0, mStream );
 

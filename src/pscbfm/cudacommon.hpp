@@ -675,11 +675,12 @@ inline std::string prettyPrintBytes
     {
         if ( i != (int) parts.size()-1 && parts.at(i) == 0 )
             continue;
-        out << parts[i] << " " << suffixes[i] << ( logical ? "i" : "" )
-            << "B" << ( i > 0 ? " " : "" );
+        if ( suffixes[i] == ' ' ) // for last Bytes without suffix
+            out << parts[i] << " B";
+        else
+            out << parts[i] << " " << suffixes[i] << ( logical ? "i" : "" ) << "B ";
     }
     std::string result = out.str();
-    result.erase( result.size()-1, 1 );
     return result;
 }
 

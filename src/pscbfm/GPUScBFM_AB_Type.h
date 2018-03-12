@@ -83,6 +83,7 @@ public:
         mUpdaterGpu.setGpu( miGpuToUse );
         mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] mUpdaterGpu.setPeriodicity\n";
         /* Forward needed parameters to the GPU updater */
+        mUpdaterGpu.setAge( mIngredients.modifyMolecules().getAge() );
         mUpdaterGpu.setPeriodicity( mIngredients.isPeriodicX(),
                                     mIngredients.isPeriodicY(),
                                     mIngredients.isPeriodicZ() );
@@ -144,6 +145,7 @@ public:
         mLog( "Info" ) << "[" << __FILENAME__ << "] MCS:" << mIngredients.getMolecules().getAge() << "\n";
         mLog( "Info" ) << "[" << __FILENAME__ << "] start simulation on GPU\n";
 
+        mUpdaterGpu.setAge( mIngredients.modifyMolecules().getAge() );
         mUpdaterGpu.runSimulationOnGPU( mnSteps ); // sets mtCopyBack0
         auto const tCopyBack0 = mUpdaterGpu.mtCopyBack0;
 
@@ -160,7 +162,7 @@ public:
         }
 
         /* update number of total simulation steps already done */
-        mIngredients.modifyMolecules().setAge( mIngredients.modifyMolecules().getAge()+ mnSteps );
+        mIngredients.modifyMolecules().setAge( mIngredients.modifyMolecules().getAge() + mnSteps );
 
         if ( mLog.isActive( "Stat" ) )
         {
