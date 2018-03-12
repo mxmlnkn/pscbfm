@@ -22,6 +22,7 @@
 #   define USE_NBUFFERED_TMP_LATTICE
 #endif
 //#define USE_PERIODIC_MONOMER_SORTING
+//#define USE_GPU_FOR_OVERHEAD
 
 
 /**
@@ -1682,7 +1683,7 @@ void UpdaterGPUScBFM_AB_Type::initializeBondTable( void )
 
 void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
 {
-   mLog( "Info" ) << "Coloring graph ...\n";
+    mLog( "Info" ) << "Coloring graph ...\n";
     bool const bUniformColors = true; // setting this to true should yield more performance as the kernels are uniformly utilized
     mGroupIds = graphColoring< MonomerEdges const *, T_Id, T_Color >(
         mNeighbors->host, mNeighbors->nElements, bUniformColors,
@@ -1799,6 +1800,11 @@ void UpdaterGPUScBFM_AB_Type::initializeSpeciesSorting( void )
             mLog( "Info" ) << x << ", ";
         mLog( "Info" ) << "}\n";
     }
+
+    #if defined( USE_PERIODIC_MONOMER_SORTING )
+        miNewToi->pushAsync();
+        miToiNew->pushAsync();
+    #endif
 }
 
 using MonomerEdges = UpdaterGPUScBFM_AB_Type::MonomerEdges;
@@ -1945,7 +1951,6 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     }
     #endif
 
-    miNewToi->push();
     kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
     (
         mPolymerSystemSorted            ->gpu,
@@ -2003,7 +2008,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
 
     for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
     {
-        kernelApplyMappingToNeighbors<<< nBlocksP, nThreads >>>(
+        kernelApplyMappingToNeighbors<<< nBlocksP, nThreads, 0, mStream >>>(
             mNeighbors           ->gpu,
             miNewToi             ->gpu + mviSubGroupOffsets[ iSpecies ],
             miToiNew             ->gpu,
@@ -2018,7 +2023,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
      * basically just avoids using two temporary arrays for the resorting of
      * mPolymerSystemSorted and mviPolymerSystemSortedVirtualBox */
 
-    kernelSplitMonomerPositions<<< nBlocksP, nThreads >>>(
+    kernelSplitMonomerPositions<<< nBlocksP, nThreads, 0, mStream >>>(
         mPolymerSystem                  ->gpu,
         miNewToi                        ->gpu,
         mviPolymerSystemSortedVirtualBox->gpu,
@@ -2042,8 +2047,6 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
     if ( mNeighborsSortedSizes == NULL ) mNeighborsSortedSizes = new MirroredVector< uint8_t >( mnMonomersPadded, mStream );
     assert( mNeighborsSorted      != NULL );
     assert( mNeighborsSortedSizes != NULL );
-    mNeighborsSorted     ->memset(0);
-    mNeighborsSortedSizes->memset(0);
     mNeighbors->pushAsync();
 
     if ( mLog.isActive( "Info" ) )
@@ -2072,6 +2075,23 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
         mLog( "Info" ) << "[UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors] map neighborIds to sorted array ... ";
     }
 
+
+#if 0
+    auto const nThreads = 128;
+    auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
+    for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
+    {
+        kernelApplyMappingToNeighbors<<< nBlocksP, nThreads >>>(
+            mNeighbors           ->gpu,
+            miNewToi             ->gpu + mviSubGroupOffsets[ iSpecies ],
+            miToiNew             ->gpu,
+            mNeighborsSorted     ->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
+            mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
+            mNeighborsSortedSizes->gpu + mviSubGroupOffsets[ iSpecies ],
+            mnElementsInGroup[ iSpecies ]
+        );
+    }
+#else
     for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
     {
         for ( size_t iMonomer = 0u; iMonomer < mnElementsInGroup[ iSpecies ]; ++iMonomer )
@@ -2097,6 +2117,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
     mNeighborsSorted     ->pushAsync();
     mNeighborsSortedSizes->pushAsync();
     mLog( "Info" ) << "Done\n";
+#endif
 
     /* some checks for correctness of new adjusted neighbor global IDs */
     if ( mLog.isActive( "Check" ) )
@@ -2149,6 +2170,20 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
         mviPolymerSystemSortedVirtualBox->memset( 0 );
     #endif
 
+#if 0
+    mPolymerSystem->push();
+    auto const nThreads = 128;
+    auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
+    kernelSplitMonomerPositions<<< nBlocksP, nThreads, 0, mStream >>>(
+        mPolymerSystem                  ->gpu,
+        miNewToi                        ->gpu,
+        mviPolymerSystemSortedVirtualBox->gpu,
+        mPolymerSystemSorted            ->gpu,
+        mnMonomersPadded
+    );
+    mPolymerSystemSorted            ->pop();
+    mviPolymerSystemSortedVirtualBox->pop();
+#else
     mLog( "Info" ) << "[" << __FILENAME__ << "::initializeSortedMonomerPositions] sort mPolymerSystem -> mPolymerSystemSorted ...\n";
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
@@ -2193,10 +2228,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
     }
     mPolymerSystemSorted            ->pushAsync();
     mviPolymerSystemSortedVirtualBox->pushAsync();
-    #if defined( USE_PERIODIC_MONOMER_SORTING )
-        miNewToi->pushAsync();
-        miToiNew->pushAsync();
-    #endif
+#endif
 }
 
 void UpdaterGPUScBFM_AB_Type::initializeLattices( void )
@@ -3341,7 +3373,7 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
             cudaEventRecord( tOverflowCheck0, mStream );
         }
 
-        findAndRemoveOverflows( true /* copy to host mPolymerSystemSorted, mviPolymerSystemSortedVirtualBox */ );
+        findAndRemoveOverflows( false );
 
         if ( mLog.isActive( "Benchmark" ) )
         {
@@ -3356,6 +3388,21 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
         }
     #endif
 
+#if 0
+    auto const nThreads = 128;
+    auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
+    kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
+    (
+        mPolymerSystemSorted            ->gpu,
+        mviPolymerSystemSortedVirtualBox->gpu,
+        miNewToi                        ->gpu,
+        mPolymerSystem                  ->gpu,
+        mnMonomersPadded
+    );
+    mPolymerSystem->pop();
+#else
+    mPolymerSystemSorted->pop();
+    mviPolymerSystemSortedVirtualBox->pop();
     /* untangle reordered array so that LeMonADE can use it again */
     for ( T_Id i = 0u; i < mnAllMonomers; ++i )
     {
@@ -3367,6 +3414,7 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
         mPolymerSystem->host[i].z = pTarget->z + mviPolymerSystemSortedVirtualBox->host[ miToiNew->host[i] ].z * mBoxZ;
         mPolymerSystem->host[i].w = pTarget->w;
     }
+#endif
 
     checkSystem(); // no-op if "Check"-level deactivated
 }
