@@ -33,7 +33,7 @@
  *   - USE_BIT_PACKING_TMP_LATTICE
  *   - USE_MOORE_CURVE_FOR_LATTICE
  * @todo using USE_BIT_PACKING_TMP_LATTICE without USE_ZCURVE_FOR_LATTICE
- *       does not work! The error must be in checkFrontBitPacked ... ?
+ *       does not work! The error must be in checkFront ... ?
  * @todo USE_MOORE_CURVE_FOR_LATTICE does not work, neither with nor without
  *       USE_BIT_PACKING_TMP_LATTICE
  */
@@ -426,41 +426,12 @@ __device__ inline bool checkFront
     uint32_t            const & x0        ,
     uint32_t            const & y0        ,
     uint32_t            const & z0        ,
-    uint32_t            const & axis      ,
+    T_Flags             const & axis      ,
     T_Lattice (*fetch)( cudaTextureObject_t, int ) = &tex1Dfetch< T_Lattice >,
     T_Id              * const   iOldPos = NULL
 )
 {
-#if 0
-    if ( iOldPos != NULL )
-        *iOldPos =  linearizeBoxVectorIndex( x0, y0, z0 );
-
-    bool isOccupied = false;
-    #define TMP_FETCH( x,y,z ) \
-        (*fetch)( texLattice, linearizeBoxVectorIndex(x,y,z) )
-    auto const shift  = 4 * ( axis & 1u ) - 2;
-    auto const iMove = axis >> 1;
-    /* reduce branching by parameterizing the access axis, but that
-     * makes the memory accesses more random again ???
-     * for i0=0, i1=1, axis=z (same as in function doxygen ascii art)
-     *    4 3 2
-     *    5 0 1
-     *    6 7 8
-     */
-    T_CoordinateCuda r[3] = { x0, y0, z0 };
-    r[ iMove ] += shift; isOccupied = TMP_FETCH( r[0], r[1], r[2] ); /* 0 */
-    auto const i0 = iMove+1 >= 3 ? iMove+1-3 : iMove+1;
-    auto const i1 = iMove+2 >= 3 ? iMove+2-3 : iMove+2;
-    r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 1 */
-    r[ i1 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 2 */
-    r[ i0 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 3 */
-    r[ i0 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 4 */
-    r[ i1 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 5 */
-    r[ i1 ]--; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 6 */
-    r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 7 */
-    r[ i0 ]++; isOccupied |= TMP_FETCH( r[0], r[1], r[2] ); /* 8 */
-    #undef TMP_FETCH
-#elif 0 // defined( NOMAGIC )
+#if 0 // defined( NOMAGIC )
     if ( iOldPos != NULL )
         *iOldPos =  linearizeBoxVectorIndex( x0, y0, z0 );
 
@@ -525,151 +496,8 @@ __device__ inline bool checkFront
         }
         #undef TMP_FETCH
     }
-#else
-    #if defined( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
-        auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
-        auto const x0PDX  = diluteBits< uint32_t, 2 >( ( x0 + uint32_t(1) ) & dcBoxXM1 );
-        auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
-        auto const y0Abs  = diluteBits< uint32_t, 2 >( ( y0               ) & dcBoxYM1 ) << 1;
-        auto const y0PDY  = diluteBits< uint32_t, 2 >( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << 1;
-        auto const y0MDY  = diluteBits< uint32_t, 2 >( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << 1;
-        auto const z0Abs  = diluteBits< uint32_t, 2 >( ( z0               ) & dcBoxZM1 ) << 2;
-        auto const z0PDZ  = diluteBits< uint32_t, 2 >( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << 2;
-        auto const z0MDZ  = diluteBits< uint32_t, 2 >( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << 2;
-    #else
-        auto const x0Abs  =   ( x0               ) & dcBoxXM1;
-        auto const x0PDX  =   ( x0 + uint32_t(1) ) & dcBoxXM1;
-        auto const x0MDX  =   ( x0 - uint32_t(1) ) & dcBoxXM1;
-        auto const y0Abs  = ( ( y0               ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const y0PDY  = ( ( y0 + uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const y0MDY  = ( ( y0 - uint32_t(1) ) & dcBoxYM1 ) << dcBoxXLog2;
-        auto const z0Abs  = ( ( z0               ) & dcBoxZM1 ) << dcBoxXYLog2;
-        auto const z0PDZ  = ( ( z0 + uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
-        auto const z0MDZ  = ( ( z0 - uint32_t(1) ) & dcBoxZM1 ) << dcBoxXYLog2;
-    #endif
-
-    if ( iOldPos != NULL )
-        *iOldPos = x0Abs + y0Abs + z0Abs;
-
-    auto const dx = DXTable_d[ axis ];   // 2*axis-1
-    auto const dy = DYTable_d[ axis ];   // 2*(axis&1)-1
-    auto const dz = DZTable_d[ axis ];   // 2*(axis&1)-1
-
-    uint32_t is[9];
-
-    #if defined( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
-        switch ( axis >> 1 )
-        {
-            case 0: is[7] = ( x0 + 2*dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( y0 + 2*dy ) & dcBoxYM1; break;
-            case 2: is[7] = ( z0 + 2*dz ) & dcBoxZM1; break;
-        }
-        is[7] = diluteBits< uint32_t, 2 >( is[7] ) << ( axis >> 1 );
-    #else
-        switch ( axis >> 1 )
-        {
-            case 0: is[7] =   ( x0 + 2*dx ) & dcBoxXM1; break;
-            case 1: is[7] = ( ( y0 + 2*dy ) & dcBoxYM1 ) << dcBoxXLog2; break;
-            case 2: is[7] = ( ( z0 + 2*dz ) & dcBoxZM1 ) << dcBoxXYLog2; break;
-        }
-    #endif
-    switch ( axis >> 1 )
-    {
-        case 0: //-+x
-        {
-            is[2]  = is[7] | z0MDZ;
-            is[5]  = is[7] | z0Abs;
-            is[8]  = is[7] | z0PDZ;
-            is[0]  = is[2] | y0MDY; // (-1,-1)
-            is[1]  = is[2] | y0Abs; // ( 0,-1)
-            is[2] |=         y0PDY; // (+1,-1)
-            is[3]  = is[5] | y0MDY; // (-1, 0)
-            is[4]  = is[5] | y0Abs; // ( 0, 0)
-            is[5] |=         y0PDY; // (+1, 0)
-            is[6]  = is[8] | y0MDY; // (-1,+1)
-            is[7]  = is[8] | y0Abs; // ( 0,+1)
-            is[8] |=         y0PDY; // (+1,+1)
-            break;
-            /**
-             * theoretically best orderings:
-             *  -x: (dy,dz), (-1,-1), (0,-1), (-1,0) | (1,-1), (0,0) (-1,1) | (1,0), (0,1), (1,1)
-             *  +x: (dy,dz), (-1,-1), (0,-1), (-1,0) | (1,-1), (0,0) (-1,1) | (1,0), (0,1), (1,1)
-             *                is[0]   is[1]    is[3]    is[2]  is[4]  is[6]   is[5]  is[7]  is[8]
-             */
-        }
-        case 1: //-+y
-        {
-            is[2]  = is[7] | z0MDZ;
-            is[5]  = is[7] | z0Abs;
-            is[8]  = is[7] | z0PDZ;
-            is[0]  = is[2] | x0MDX;
-            is[1]  = is[2] | x0Abs;
-            is[2] |=         x0PDX;
-            is[3]  = is[5] | x0MDX;
-            is[4]  = is[5] | x0Abs;
-            is[5] |=         x0PDX;
-            is[6]  = is[8] | x0MDX;
-            is[7]  = is[8] | x0Abs;
-            is[8] |=         x0PDX;
-            break;
-        }
-        case 2: //-+z
-        {
-            is[2]  = is[7] | y0MDY;
-            is[5]  = is[7] | y0Abs;
-            is[8]  = is[7] | y0PDY;
-            is[0]  = is[2] | x0MDX;
-            is[1]  = is[2] | x0Abs;
-            is[2] |=         x0PDX;
-            is[3]  = is[5] | x0MDX;
-            is[4]  = is[5] | x0Abs;
-            is[5] |=         x0PDX;
-            is[6]  = is[8] | x0MDX;
-            is[7]  = is[8] | x0Abs;
-            is[8] |=         x0PDX;
-            break;
-        }
-    }
-
-    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
-        is[0] = fromGrayCode( is[0] );
-        is[1] = fromGrayCode( is[1] );
-        is[2] = fromGrayCode( is[2] );
-        is[3] = fromGrayCode( is[3] );
-        is[4] = fromGrayCode( is[4] );
-        is[5] = fromGrayCode( is[5] );
-        is[6] = fromGrayCode( is[6] );
-        is[7] = fromGrayCode( is[7] );
-        is[8] = fromGrayCode( is[8] );
-    #endif
-
-    bool const isOccupied =
-        (*fetch)( texLattice, is[ iFetchOrder0 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder1 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder2 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder3 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder4 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder5 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder6 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder7 ] ) |
-        (*fetch)( texLattice, is[ iFetchOrder8 ] );
-#endif
     return isOccupied;
-}
-
-
-#ifdef USE_BIT_PACKING
-__device__ inline bool checkFrontBitPacked
-(
-    cudaTextureObject_t const & texLattice,
-    uint32_t            const & x0        ,
-    uint32_t            const & y0        ,
-    uint32_t            const & z0        ,
-    T_Flags             const & axis      ,
-    T_Lattice (*fetch)( cudaTextureObject_t, int ) = &tex1Dfetch< T_Lattice >,
-    T_Id              * const   iOldPos = NULL
-)
-{
+#else
     #if defined( USE_ZCURVE_FOR_LATTICE ) || defined ( USE_MOORE_CURVE_FOR_LATTICE )
         auto const x0MDX  = diluteBits< uint32_t, 2 >( ( x0 - uint32_t(1) ) & dcBoxXM1 );
         auto const x0Abs  = diluteBits< uint32_t, 2 >( ( x0               ) & dcBoxXM1 );
@@ -1042,8 +870,8 @@ __device__ inline bool checkFrontBitPacked
            (*fetch)( texLattice, is[ iFetchOrder7 ] ) +
            (*fetch)( texLattice, is[ iFetchOrder8 ] );
 #endif
+#endif // NOMAGIC
 }
-#endif
 
 __device__ __host__ inline int16_t linearizeBondVectorIndex
 (
@@ -1270,7 +1098,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
         auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
         uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
-        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
     #else
         if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &tex1Dfetch< T_Lattice >, &iOldPos ) )
     #endif
@@ -1310,7 +1138,7 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
         auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
         uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
-        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
     #else
         if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &tex1Dfetch< T_Lattice >, &iOldPos ) )
     #endif
