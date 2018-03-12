@@ -44,6 +44,7 @@
 #include <cstdlib>                          // exit
 #include <cstring>                          // memset
 #include <ctime>
+#include <functional>
 #include <iostream>
 #include <limits>                           // numeric_limits
 #include <stdexcept>
@@ -334,10 +335,10 @@ __device__ inline T_Id linearizeBoxVectorIndex
         return ( p[ i >> 3 ] >> ( i & T_Id(7) ) ) & T(1);
     }
 
-    template< typename T, typename T_Id > __device__ inline
-    T bitPackedTextureGet( cudaTextureObject_t const & p, T_Id const & i )
+    template< typename T > __device__ inline
+    T bitPackedTextureGet( cudaTextureObject_t p, int i )
     {
-        return ( tex1Dfetch<T>( p, i >> 3 ) >> ( i & T_Id(7) ) ) & T(1);
+        return ( tex1Dfetch<T>( p, i >> 3 ) >> ( i & 7 ) ) & T(1);
     }
 
     /**
@@ -372,8 +373,8 @@ __device__ inline T_Id linearizeBoxVectorIndex
 #else
     template< typename T, typename T_Id > __device__ __host__ inline
     T bitPackedGet( T const * const & p, T_Id const & i ){ return p[i]; }
-    template< typename T, typename T_Id > __device__ inline
-    T bitPackedTextureGet( cudaTextureObject_t const & p, T_Id const & i ) {
+    template< typename T > __device__ inline
+    T bitPackedTextureGet( cudaTextureObject_t p, int i ) {
         return tex1Dfetch<T>(p,i); }
     template< typename T, typename T_Id > __device__ __host__ inline
     void bitPackedSet  ( T * const __restrict__ p, T_Id const & i ){ p[i] = 1; }
@@ -426,6 +427,7 @@ __device__ inline bool checkFront
     uint32_t            const & y0        ,
     uint32_t            const & z0        ,
     uint32_t            const & axis      ,
+    T_Lattice (*fetch)( cudaTextureObject_t, int ) = &tex1Dfetch< T_Lattice >,
     T_Id              * const   iOldPos = NULL
 )
 {
@@ -435,7 +437,7 @@ __device__ inline bool checkFront
 
     bool isOccupied = false;
     #define TMP_FETCH( x,y,z ) \
-        tex1Dfetch< T_Lattice >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+        (*fetch)( texLattice, linearizeBoxVectorIndex(x,y,z) )
     auto const shift  = 4 * ( axis & 1u ) - 2;
     auto const iMove = axis >> 1;
     /* reduce branching by parameterizing the access axis, but that
@@ -467,7 +469,7 @@ __device__ inline bool checkFront
     switch ( axis >> 1 )
     {
         #define TMP_FETCH( x,y,z ) \
-            tex1Dfetch< T_Lattice >( texLattice, linearizeBoxVectorIndex(x,y,z) )
+            (*fetch)( texLattice, linearizeBoxVectorIndex(x,y,z) )
         case 0: //-+x
         {
             uint32_t const x1 = x0 + shift;
@@ -641,15 +643,16 @@ __device__ inline bool checkFront
         is[8] = fromGrayCode( is[8] );
     #endif
 
-    bool const isOccupied = tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder0 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder1 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder2 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder3 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder4 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder5 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder6 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder7 ] ) |
-                            tex1Dfetch< T_Lattice >( texLattice, is[ iFetchOrder8 ] );
+    bool const isOccupied =
+        (*fetch)( texLattice, is[ iFetchOrder0 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder1 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder2 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder3 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder4 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder5 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder6 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder7 ] ) |
+        (*fetch)( texLattice, is[ iFetchOrder8 ] );
 #endif
     return isOccupied;
 }
@@ -663,6 +666,7 @@ __device__ inline bool checkFrontBitPacked
     uint32_t            const & y0        ,
     uint32_t            const & z0        ,
     T_Flags             const & axis      ,
+    T_Lattice (*fetch)( cudaTextureObject_t, int ) = &tex1Dfetch< T_Lattice >,
     T_Id              * const   iOldPos = NULL
 )
 {
@@ -740,10 +744,10 @@ __device__ inline bool checkFrontBitPacked
         is[1] = fromGrayCode ( is[1] );
     #endif
 
-    if ( ( bitPackedTextureGet< T_Lattice >( texLattice, is[0] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[3] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[6] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[1] ) ) )
+    if ( ( (*fetch)( texLattice, is[0] ) +
+           (*fetch)( texLattice, is[3] ) +
+           (*fetch)( texLattice, is[6] ) +
+           (*fetch)( texLattice, is[1] ) ) )
         return true;
 
     is[4]  = is[5] + is[7];
@@ -760,11 +764,11 @@ __device__ inline bool checkFrontBitPacked
         is[7] = fromGrayCode( is[7] );
     #endif
 
-    return bitPackedTextureGet< T_Lattice >( texLattice, is[2] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[5] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[8] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[4] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[7] );
+    return (*fetch)( texLattice, is[2] ) +
+           (*fetch)( texLattice, is[5] ) +
+           (*fetch)( texLattice, is[8] ) +
+           (*fetch)( texLattice, is[4] ) +
+           (*fetch)( texLattice, is[7] );
 #elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 5 // try to reduce registers and times even mroe
     is[8] = is[7];
     auto const direction = axis >> 1;
@@ -888,9 +892,9 @@ __device__ inline bool checkFrontBitPacked
         is[6] = fromGrayCode( is[6] );
     #endif
 
-    if ( ( bitPackedTextureGet< T_Lattice >( texLattice, is[0] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[3] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[6] ) ) )
+    if ( ( (*fetch)( texLattice, is[0] ) +
+           (*fetch)( texLattice, is[3] ) +
+           (*fetch)( texLattice, is[6] ) ) )
         return true;
 
     switch ( axis >> 1 )
@@ -921,12 +925,12 @@ __device__ inline bool checkFrontBitPacked
         is[8] = fromGrayCode( is[8] );
     #endif
 
-    return bitPackedTextureGet< T_Lattice >( texLattice, is[2] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[5] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[8] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[1] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[4] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[7] );
+    return (*fetch)( texLattice, is[2] ) +
+           (*fetch)( texLattice, is[5] ) +
+           (*fetch)( texLattice, is[8] ) +
+           (*fetch)( texLattice, is[1] ) +
+           (*fetch)( texLattice, is[4] ) +
+           (*fetch)( texLattice, is[7] );
 #elif CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION == 0
     switch ( axis >> 1 )
     {
@@ -1028,15 +1032,15 @@ __device__ inline bool checkFrontBitPacked
         is[8] = fromGrayCode( is[8] );
     #endif
 
-    return bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder0 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder1 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder2 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder3 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder4 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder5 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder6 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder7 ] ) +
-           bitPackedTextureGet< T_Lattice >( texLattice, is[ iFetchOrder8 ] );
+    return (*fetch)( texLattice, is[ iFetchOrder0 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder1 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder2 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder3 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder4 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder5 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder6 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder7 ] ) +
+           (*fetch)( texLattice, is[ iFetchOrder8 ] );
 #endif
 }
 #endif
@@ -1266,9 +1270,9 @@ __global__ void kernelSimulationScBFMPerformSpecies
         auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
         uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
-        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
+        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
     #else
-        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &tex1Dfetch< T_Lattice >, &iOldPos ) )
     #endif
             continue;
 
@@ -1306,9 +1310,9 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
         auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
         uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
-        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
+        if ( checkFrontBitPacked( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
     #else
-        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &iOldPos ) )
+        if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &tex1Dfetch< T_Lattice >, &iOldPos ) )
     #endif
             continue;
 
@@ -1344,7 +1348,7 @@ __global__ void kernelCountFilteredPerform
 
         auto const data = dpPolymerSystem[ iMonomer ];
         auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
-        if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction, NULL ) )
+        if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
             atomicAdd( dpFiltered+4, size_t(1) );
     }
 }
