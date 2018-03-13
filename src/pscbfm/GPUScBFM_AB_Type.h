@@ -11,6 +11,9 @@
 #include "SelectiveLogger.hpp"
 
 
+#define USE_UINT8_POSITIONS
+
+
 /**
  * Why is this abstraction layer being used, instead of just incorporating
  * the GPU updated into this class?
@@ -31,7 +34,13 @@ protected:
     MoleculesType   & molecules   ;
 
 private:
-    UpdaterGPUScBFM_AB_Type mUpdaterGpu;
+#if defined( USE_UINT8_POSITIONS )
+    UpdaterGPUScBFM_AB_Type< uint8_t  > mUpdaterGpu  ;
+    UpdaterGPUScBFM_AB_Type< uint16_t > mUpdaterGpu16; // can't use uint8_t for boxes larger 256 on any side
+#else
+    //UpdaterGPUScBFM_AB_Type< int32_t > mUpdaterGpu;
+    UpdaterGPUScBFM_AB_Type< int16_t > mUpdaterGpu;
+#endif
     int miGpuToUse;
     //! Number of Monte-Carlo Steps (mcs) to be executed (per GPU-call / Updater call)
     uint32_t mnSteps;

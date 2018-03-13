@@ -29,7 +29,6 @@
 //#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
 #define USE_ZCURVE_FOR_LATTICE
 //#define USE_MOORE_CURVE_FOR_LATTICE
-#define USE_UINT8_POSITIONS
 //#define USE_DOUBLE_BUFFERED_TMP_LATTICE
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
 #   define USE_NBUFFERED_TMP_LATTICE
@@ -147,6 +146,14 @@ struct AlignedMatrices
     }
 };
 
+/* stores amount and IDs of neighbors for each monomer */
+struct MonomerEdges
+{
+    uint32_t size; // could also be uint8_t as it is limited by MAX_CONNECTIVITY
+    uint32_t neighborIds[ MAX_CONNECTIVITY ];
+};
+
+template< typename T_UCoordinateCuda >
 class UpdaterGPUScBFM_AB_Type
 {
 public:
@@ -171,18 +178,10 @@ public:
      */
     using T_BoxSize          = uint64_t; // uint32_t // should be unsigned!
     using T_Coordinate       = int32_t; // int64_t // should be signed!
-#if defined( USE_UINT8_POSITIONS )
-    using T_CoordinateCuda   = int8_t; // int16_t, but only if box size <= 256 :S @todo choose automatically depending on box size -> template parameter -> need to template all kernels and then basically make a large if for int8 vs. int16 limiting box size to 65536 which is more than enough at least for 3D ...
-    using T_UCoordinateCuda  = std::make_unsigned< T_CoordinateCuda >::type;
-#else
-    /* we have to used signed types for calculations, else we get wrong
-     * results without overflow checks! */
-    using T_CoordinateCuda   = int32_t;
-    using T_UCoordinateCuda  = T_CoordinateCuda;
-#endif
-    using T_Coordinates      = CudaVec4< T_Coordinate      >::value_type;
-    using T_CoordinatesCuda  = CudaVec4< T_CoordinateCuda  >::value_type;
-    using T_UCoordinatesCuda = CudaVec4< T_UCoordinateCuda >::value_type;
+    using T_CoordinateCuda   = typename std::make_signed< int8_t >::type; // int16_t, but only if box size <= 256 :S @todo choose automatically depending on box size -> template parameter -> need to template all kernels and then basically make a large if for int8 vs. int16 limiting box size to 65536 which is more than enough at least for 3D ...
+    using T_Coordinates      = typename CudaVec4< T_Coordinate      >::value_type;
+    using T_CoordinatesCuda  = typename CudaVec4< T_CoordinateCuda  >::value_type;
+    using T_UCoordinatesCuda = typename CudaVec4< T_UCoordinateCuda >::value_type;
 
     /* could also be uint8_t if you know you only have 256 different
      * species at maximum. For the autocoloring this is implicitly true,
@@ -193,6 +192,14 @@ public:
     using T_Lattice = uint8_t ; // untested for something else than uint8_t!
 
 private:
+    /* only do checks for uint8_t and uint16_t, for all signed data types
+     * we kinda assume the user to think himself smart enough that he does
+     * not want the overflow checking version. This is because the overflow
+     * checking is not tested with signed types being used! */
+    static bool constexpr useOverflowChecks =
+        sizeof( T_UCoordinateCuda ) <= 2 &&
+        ! std::is_signed< T_UCoordinateCuda >::value;
+
     SelectedLogger mLog;
 
     cudaStream_t mStream;
@@ -302,18 +309,6 @@ private:
      * info directly instead of needing to desort after each execute run */
     bool bPolymersSorted;
 
-public:
-    /* stores amount and IDs of neighbors for each monomer */
-    struct MonomerEdges
-    {
-        T_Id size; // could also be uint8_t as it is limited by MAX_CONNECTIVITY
-        T_Id neighborIds[ MAX_CONNECTIVITY ];
-    };
-    /* size is encoded in mPolymerSystem to make things faster */
-    struct MonomerEdgesCompressed
-    {
-        T_Id neighborIds[ MAX_CONNECTIVITY ];
-    };
 private:
     MirroredVector< MonomerEdges > * mNeighbors;
     /**
