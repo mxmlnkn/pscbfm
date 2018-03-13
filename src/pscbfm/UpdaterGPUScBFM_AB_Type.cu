@@ -911,7 +911,7 @@ namespace {
  *       Why are there three kernels instead of just one
  *        -> for global synchronization
  */
-template< typename T_UCoordinateCuda >
+template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
 __global__ void kernelSimulationScBFMCheckSpecies
 (
     typename CudaVec4< T_UCoordinateCuda >::value_type
@@ -948,14 +948,27 @@ __global__ void kernelSimulationScBFMCheckSpecies
             T_UCoordinateCuda( r0.z + DZTable_d[ direction ] )
         };
 
-    #ifdef NONPERIODICITY
-       /* check whether the new location of the particle would be inside the box
-        * if the box is not periodic, if not, then don't move the particle */
-        if ( T_UCoordinateCuda(0) <= r1.x && r1.x < dcBoxXM1 &&
-             T_UCoordinateCuda(0) <= r1.y && r1.y < dcBoxYM1 &&
-             T_UCoordinateCuda(0) <= r1.z && r1.z < dcBoxZM1    )
+        /* check whether the new location of the particle would be inside the box
+         * if the box is not periodic, if not, then don't move the particle
+         * r1 is unsigned so we don't have to check whether it's < 0 as that
+         * would mean it -1 wraps around to UINTN_MAX
+         * But in order for this to work with 256-sized boxes on uint8_t with
+         * non-periodic boundary conditions, we have to check for wrap arounds
+         * wrap arounds can only happen if the monomer was at 0 or dcBoxXM1
+         * and moved outside
+         *   0 <= x1 <= dcBoxX is useless, we need to replace, not add to it!
+         *   0 < x0 <= dxBoxXM1 || ( x0 == 0 && x1 <= 1 ) || ( x0 == 255 && x1 >= 254 )
+         */
+        if ( ( T_IsPeriodicX || ( ( 0 < r0.x && r1.x < dcBoxXM1 ) ||
+                                  ( r0.x == 0 && r1.x <= 1 ) ||
+                                  ( r0.x == dcBoxXM1 && r1.x > 1 ) ) ) &&
+             ( T_IsPeriodicY || ( ( 0 < r0.y && r1.y < dcBoxXM1 ) ||
+                                  ( r0.y == 0 && r1.y <= 1 ) ||
+                                  ( r0.y == dcBoxXM1 && r1.y > 1 ) ) ) &&
+             ( T_IsPeriodicZ || ( ( 0 < r0.z && r1.z < dcBoxXM1 ) ||
+                                  ( r0.z == 0 && r1.z <= 1 ) ||
+                                  ( r0.z == dcBoxXM1 && r1.z > 1 ) ) ) )
         {
-    #endif
             /* check whether the new position would result in invalid bonds
              * between this monomer and its neighbors */
             auto const nNeighbors = dpNeighborsSizes[ iMonomer ];
@@ -983,15 +996,13 @@ __global__ void kernelSimulationScBFMCheckSpecies
                 dpLatticeTmp[ linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) ] = 1;
             #endif
             }
-    #ifdef NONPERIODICITY
         }
-    #endif
         dpPolymerFlags[ iMonomer ] = properties;
     }
 }
 
 
-template< typename T_UCoordinateCuda >
+template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
 __global__ void kernelCountFilteredCheck
 (
     typename CudaVec4< T_UCoordinateCuda >::value_type
@@ -1024,12 +1035,16 @@ __global__ void kernelCountFilteredCheck
             T_UCoordinateCuda( r0.z + DZTable_d[ direction ] )
         };
 
-    #ifdef NONPERIODICITY
-        if ( T_UCoordinateCuda(0) <= r1.x && r1.x < dcBoxXM1 &&
-             T_UCoordinateCuda(0) <= r1.y && r1.y < dcBoxYM1 &&
-             T_UCoordinateCuda(0) <= r1.z && r1.z < dcBoxZM1    )
+        if ( ( T_IsPeriodicX || ( ( 0 < r0.x && r1.x < dcBoxXM1 ) ||
+                                  ( r0.x == 0 && r1.x <= 1 ) ||
+                                  ( r0.x == dcBoxXM1 && r1.x > 1 ) ) ) &&
+             ( T_IsPeriodicY || ( ( 0 < r0.y && r1.y < dcBoxXM1 ) ||
+                                  ( r0.y == 0 && r1.y <= 1 ) ||
+                                  ( r0.y == dcBoxXM1 && r1.y > 1 ) ) ) &&
+             ( T_IsPeriodicZ || ( ( 0 < r0.z && r1.z < dcBoxXM1 ) ||
+                                  ( r0.z == 0 && r1.z <= 1 ) ||
+                                  ( r0.z == dcBoxXM1 && r1.z > 1 ) ) ) )
         {
-    #endif
             auto const nNeighbors = dpNeighborsSizes[ iOffset + iMonomer ];
             bool forbiddenBond = false;
             for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
@@ -1049,9 +1064,7 @@ __global__ void kernelCountFilteredCheck
                 if ( ! forbiddenBond ) /* this is the more real relative use-case where invalid bonds are already filtered out */
                     atomicAdd( dpFiltered+3, 1 );
             }
-    #ifdef NONPERIODICITY
         }
-    #endif
     }
 }
 
@@ -1332,6 +1345,9 @@ template< typename T_UCoordinateCuda >
 UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::UpdaterGPUScBFM_AB_Type()
  : mStream                          ( 0    ),
    mAge                             ( 0    ),
+   mIsPeriodicX                     ( true ),
+   mIsPeriodicY                     ( true ),
+   mIsPeriodicZ                     ( true ),
    mnStepsBetweenSortings           ( 5000 ),
    mLatticeOut                      ( NULL ),
    mLatticeTmp                      ( NULL ),
@@ -1431,7 +1447,13 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::destruct()
     deletePointer( mNeighbors                      , "mNeighbors"                       );
     deletePointer( mNeighborsSorted                , "mNeighborsSorted"                 );
     deletePointer( mNeighborsSortedSizes           , "mNeighborsSortedSizes"            );
-    mLog( "Info" ) << "Freed a total of " << prettyPrintBytes( deletePointer.nBytesFreed ) << " on GPU and host RAM.\n";
+    if ( deletePointer.nBytesFreed > 0 )
+    {
+        mLog( "Info" )
+            << "Freed a total of "
+            << prettyPrintBytes( deletePointer.nBytesFreed )
+            << " on GPU and host RAM.\n";
+    }
 }
 
 template< typename T_UCoordinateCuda >
@@ -1457,23 +1479,6 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setGpu( int iGpuToUse )
     CUDA_ERROR( cudaSetDevice( iGpuToUse ) );
     miGpuToUse = iGpuToUse;
 }
-
-#if 0
-{
-    /* a class helper for restructuring data */
-    template< typename >
-    class ShufflingVector
-    {
-        private:
-            size_t const n;
-            std::vector< size_t > miToiNew, miNewToi;
-
-        public:
-            inline ShufflingVector( size_t const & n )
-            :
-    }
-}
-#endif
 
 template< typename T_UCoordinateCuda >
 void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initializeBondTable( void )
@@ -2509,24 +2514,9 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setPeriodicity
     bool const isPeriodicZ
 )
 {
-    /* Compare inputs to hardcoded values. No ability yet to adjust dynamically */
-#ifdef NONPERIODICITY
-    if ( isPeriodicX || isPeriodicY || isPeriodicZ )
-#else
-    if ( ! isPeriodicX || ! isPeriodicY || ! isPeriodicZ )
-#endif
-    {
-        std::stringstream msg;
-        msg << "[" << __FILENAME__ << "::setPeriodicity" << "] "
-            << "Simulation is intended to use completely "
-        #ifdef NONPERIODICITY
-            << "non-"
-        #endif
-            << "periodic boundary conditions, but setPeriodicity was called with "
-            << "(" << isPeriodicX << "," << isPeriodicY << "," << isPeriodicZ << ")\n";
-        mLog( "Error" ) << msg.str();
-        throw std::invalid_argument( msg.str() );
-    }
+    mIsPeriodicX = isPeriodicX;
+    mIsPeriodicY = isPeriodicY;
+    mIsPeriodicZ = isPeriodicZ;
 }
 
 template< typename T_UCoordinateCuda >
@@ -3031,35 +3021,50 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
                 mLog( "Info" ) << "Calling Check-Kernel for species " << iSpecies << " for uint32_t * " << (void*) mNeighborsSorted->gpu << " + " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " = " << (void*)( mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) ) << " with pitch " << mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ) << "\n";
             */
 
-            kernelSimulationScBFMCheckSpecies< T_UCoordinateCuda >
-            <<< nBlocks, nThreads, 0, mStream >>>(
-                mPolymerSystemSorted->gpu,
-                mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],
-                mviSubGroupOffsets[ iSpecies ],
-                mLatticeTmp->gpu + iOffsetLatticeTmp,
-                mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
-                mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
-                mNeighborsSortedSizes->gpu + mviSubGroupOffsets[ iSpecies ],
-                mnElementsInGroup[ iSpecies ], seed,
-                mLatticeOut->texture
-            );
-
-            if ( mLog.isActive( "Stats" ) )
-            {
-                kernelCountFilteredCheck< T_UCoordinateCuda >
-                <<< nBlocks, nThreads, 0, mStream >>>(
-                    mPolymerSystemSorted->gpu,
-                    mPolymerFlags->gpu,
-                    mviSubGroupOffsets[ iSpecies ],
-                    mLatticeTmp->gpu + iOffsetLatticeTmp,
-                    mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ),
-                    mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),
-                    mNeighborsSortedSizes->gpu,
-                    mnElementsInGroup[ iSpecies ], seed,
-                    mLatticeOut->texture,
-                    dpFiltered
-                );
+            #define TMP_CALL_KERNEL_CHECK( PX, PY, PZ )                        \
+            kernelSimulationScBFMCheckSpecies< T_UCoordinateCuda, PX, PY, PZ > \
+            <<< nBlocks, nThreads, 0, mStream >>>(                             \
+                mPolymerSystemSorted->gpu,                                     \
+                mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],           \
+                mviSubGroupOffsets[ iSpecies ],                                \
+                mLatticeTmp->gpu + iOffsetLatticeTmp,                          \
+                mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ), \
+                mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),       \
+                mNeighborsSortedSizes->gpu + mviSubGroupOffsets[ iSpecies ],   \
+                mnElementsInGroup[ iSpecies ], seed,                           \
+                mLatticeOut->texture                                           \
+            );                                                                 \
+                                                                               \
+            if ( mLog.isActive( "Stats" ) )                                    \
+            {                                                                  \
+                kernelCountFilteredCheck< T_UCoordinateCuda, PX, PY, PZ >      \
+                <<< nBlocks, nThreads, 0, mStream >>>(                         \
+                    mPolymerSystemSorted->gpu,                                 \
+                    mPolymerFlags->gpu,                                        \
+                    mviSubGroupOffsets[ iSpecies ],                            \
+                    mLatticeTmp->gpu + iOffsetLatticeTmp,                      \
+                    mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ), \
+                    mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),   \
+                    mNeighborsSortedSizes->gpu,                                \
+                    mnElementsInGroup[ iSpecies ], seed,                       \
+                    mLatticeOut->texture,                                      \
+                    dpFiltered                                                 \
+                );                                                             \
             }
+            auto const periodicity = ( mIsPeriodicX << 2 ) + ( mIsPeriodicY << 1 ) + mIsPeriodicZ;
+            switch ( periodicity )
+            {
+                case 0: TMP_CALL_KERNEL_CHECK( false, false, false ); break;
+                case 1: TMP_CALL_KERNEL_CHECK( false, false,  true ); break;
+                case 2: TMP_CALL_KERNEL_CHECK( false,  true, false ); break;
+                case 3: TMP_CALL_KERNEL_CHECK( false,  true,  true ); break;
+                case 4: TMP_CALL_KERNEL_CHECK(  true, false, false ); break;
+                case 5: TMP_CALL_KERNEL_CHECK(  true, false,  true ); break;
+                case 6: TMP_CALL_KERNEL_CHECK(  true,  true, false ); break;
+                case 7: TMP_CALL_KERNEL_CHECK(  true,  true,  true ); break;
+                default: assert( false );
+            }
+            #undef TMP_CALL_KERNEL_CHECK
 
             if ( useCudaMemset )
             {

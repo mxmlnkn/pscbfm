@@ -236,7 +236,7 @@ public:
         auto const maxBoxSize = std::max( mIngredients.getBoxX(),
             std::max( mIngredients.getBoxY(), mIngredients.getBoxZ() ) );
         assert( maxBoxSize >= 0 );
-        mCanUseUint8Positions = maxBoxSize <= ( 1llu << ( CHAR_BIT * sizeof( uint8_t ) ) );
+        mCanUseUint8Positions = (unsigned long long) maxBoxSize <= ( 1llu << ( CHAR_BIT * sizeof( uint8_t ) ) );
         if ( mCanUseUint8Positions )
             initializeUpdater< uint8_t >();
         else

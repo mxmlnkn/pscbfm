@@ -40,7 +40,9 @@ void printHelp( void )
         << "    -o, --output <file path>\n"
         << "        all intermediate steps at each save-interval will be appended to this file even if it already exists\n"
         << "    -g, --gpu <integer>\n"
-        << "        specify the GPU to use. The ID goes from 0 to the number of GPUs installed - 1\n";
+        << "        specify the GPU to use. The ID goes from 0 to the number of GPUs installed - 1\n"
+        << "    -v, --version\n"
+        ;
     std::cout << msg.str();
 }
 

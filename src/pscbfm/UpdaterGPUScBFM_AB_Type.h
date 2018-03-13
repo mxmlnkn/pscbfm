@@ -225,6 +225,9 @@ private:
     RandomNumberGenerators randomNumbers;
     int64_t mAge;
     int64_t mnStepsBetweenSortings;
+    bool mIsPeriodicX;
+    bool mIsPeriodicY;
+    bool mIsPeriodicZ;
 
     bool mForbiddenBonds[512];
     //int BondAsciiArray[512];
