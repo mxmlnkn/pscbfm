@@ -40,6 +40,22 @@
 #include "SelectiveLogger.hpp"
 #include "graphColoring.tpp"
 
+#include <curand.h>
+#include "rngs/Hash.h"
+#include "rngs/lemonade_philox.h"
+#include "rngs/PCG.h"
+#include "rngs/RNGload.h"
+#include "rngs/Saru.h"
+
+#define CURAND_CALL(x)                                          \
+do                                                              \
+{                                                               \
+    if ( ( x ) != CURAND_STATUS_SUCCESS )                       \
+    {                                                           \
+        printf( "Error at %s:%d\n", __FILENAME__, __LINE__ );   \
+        return ;                                                \
+    }                                                           \
+} while (0)
 
 #define DEBUG_UPDATERGPUSCBFM_AB_TYPE 100
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) || defined( USE_BIT_PACKING_LATTICE )
@@ -1375,7 +1391,9 @@ UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::UpdaterGPUScBFM_AB_Type()
    mBoxYM1                          ( 0    ),
    mBoxZM1                          ( 0    ),
    mBoxXLog2                        ( 0    ),
-   mBoxXYLog2                       ( 0    )
+   mBoxXYLog2                       ( 0    ),
+   mRngVectorXorwow                 ( NULL ),
+   mStateVectorPcg                  ( NULL )
 {
     /**
      * Log control.
@@ -1447,6 +1465,8 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::destruct()
     deletePointer( mNeighbors                      , "mNeighbors"                       );
     deletePointer( mNeighborsSorted                , "mNeighborsSorted"                 );
     deletePointer( mNeighborsSortedSizes           , "mNeighborsSortedSizes"            );
+    deletePointer( mRngVectorXorwow                , "mRngVectorXorwow"                 );
+    deletePointer( mStateVectorPcg                 , "mStateVectorPcg"                  );
     if ( deletePointer.nBytesFreed > 0 )
     {
         mLog( "Info" )
@@ -2476,6 +2496,25 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initialize( void )
     if ( mAge != 0 )
         doSpatialSorting();
 
+    /* initializeRandomNumbers */
+    /* xorwow */
+    mSeedXorwow = 781241814;
+    //mSeedXorwow      = randomNumbers.r250_rand32();
+    mRngVectorXorwow = new MirroredVector< RNGload::GlobalState >( mnAllMonomers );
+    CURAND_CALL( curandCreateGenerator( & mGenXorwow, CURAND_RNG_PSEUDO_DEFAULT ) );
+    cudaStreamCreate( &mStreamXorwow1 );
+    cudaStreamCreate( &mStreamXorwow2 );
+    CURAND_CALL( curandSetStream ( mGenXorwow, mStreamXorwow1 ) );
+    CURAND_CALL( curandSetPseudoRandomGeneratorSeed( mGenXorwow, mSeedXorwow ) );
+    CURAND_CALL( curandGenerate( mGenXorwow, mRngVectorXorwow->gpu, mnAllMonomers ) ); //Generate a first set of RNGs
+    /* pcg */
+    mSeedPcg = 781241814;
+    //mSeedPcg = randomNumbers.r250_rand32();
+    mStateVectorPcg = new MirroredVector< PCG::State >( mnAllMonomers );
+    for ( unsigned int i = 0; i < mnAllMonomers; ++i )
+            mStateVectorPcg->host[i] = PCG::State( mSeedPcg, i );
+    mStateVectorPcg->push();
+
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
     CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
 }
@@ -3401,6 +3440,8 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::cleanup()
 {
     this->destruct();
 
+    cudaStreamDestroy( mStreamXorwow1 );
+    cudaStreamDestroy( mStreamXorwow2 );
     cudaDeviceSynchronize();
     cudaProfilerStop();
 }

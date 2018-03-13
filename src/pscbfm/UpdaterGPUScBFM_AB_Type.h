@@ -21,6 +21,9 @@
 #include "cudacommon.hpp"
 #include "SelectiveLogger.hpp"
 
+#include <curand.h>
+#include "rngs/RNGload.h"
+#include "rngs/PCG.h"
 
 
 //#define USE_THRUST_FILL
@@ -33,7 +36,7 @@
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
 #   define USE_NBUFFERED_TMP_LATTICE
 #endif
-#define USE_PERIODIC_MONOMER_SORTING
+//#define USE_PERIODIC_MONOMER_SORTING
 #define USE_GPU_FOR_OVERHEAD
 //#define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 0 // choose between 0 and 6, Incidentally 0 and 6 seem to be the best two
 
@@ -398,10 +401,21 @@ private:
     T_BoxSize mBoxZM1   ;
     T_BoxSize mBoxXLog2 ;
     T_BoxSize mBoxXYLog2;
+    uint32_t mGlobalIterator; // used for the RNG, equal to mAge + iStep * nSpecies + iSubstep
 
     int            miGpuToUse;
     cudaDeviceProp mCudaProps;
 
+    /* data needed for alternative RNGs */
+    uint32_t mSeedXorwow;
+    MirroredVector< typename RNGload::GlobalState > * mRngVectorXorwow;
+    curandGenerator_t mGenXorwow;
+    cudaStream_t mStreamXorwow1, mStreamXorwow2;
+
+    uint32_t mSeedPcg;
+    MirroredVector< PCG::State > * mStateVectorPcg;
+
+private:
     /**
      * If we constrict each index to 1024=2^10 which already is quite large,
      * 256=2^8 being normally large, then this means that the linearzed index

@@ -247,7 +247,7 @@ cuda_add_executable( ${BIN_NAME}
     src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
     src/pscbfm/mainCUDASimulatorGPUScBFM_AB_Type.cpp
 )
-target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} cuda )
+target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} ${CUDA_curand_LIBRARY} cuda )
 
 
 # Bcc BFM
