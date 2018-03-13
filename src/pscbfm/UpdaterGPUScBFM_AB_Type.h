@@ -35,7 +35,25 @@
 #endif
 #define USE_PERIODIC_MONOMER_SORTING
 #define USE_GPU_FOR_OVERHEAD
+//#define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 0 // choose between 0 and 6, Incidentally 0 and 6 seem to be the best two
 
+
+/**
+ * for some reason version 6 has a 5% improvement over version 0 with
+ * USE_PERIODIC_MONOMER_SORTING turned on, but is 5% slower over version 0
+ * with USE_PERIODIC_MONOMER_SORTING being turned of ...
+ * Only tested on GTX 650 Ti with 512 chains of length 1024, it might
+ * be vastly different on other systems
+ * Let the user benchmark manually or add it to autoconfig loop as a
+ * template parameter for the kernels calling checkFront ...?
+ */
+#if ! defined( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION )
+#   if ! defined( USE_PERIODIC_MONOMER_SORTING )
+#       define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 0
+#   else
+#       define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 6
+#   endif
+#endif
 
 /**
  * working combinations:

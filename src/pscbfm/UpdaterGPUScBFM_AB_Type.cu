@@ -361,8 +361,6 @@ __device__ inline T_Id linearizeBoxVectorIndex
 #endif
 
 
-#define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 6
-
 #if CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 6 && CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION != 1
 
 int constexpr iFetchOrder0 = 0;
@@ -2381,6 +2379,51 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initialize( void )
     << "T_Flags            = " << getTypeInfoString< T_Flags            >() << "\n"
     << "T_Id               = " << getTypeInfoString< T_Id               >() << "\n"
     << "T_Lattice          = " << getTypeInfoString< T_Lattice          >() << "\n";
+
+    /* write out macro definition configuration */
+    mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] Macro configurations:\n"
+    #if defined( USE_THRUST_FILL )
+        << " - using thrust::fill\n"
+    #endif
+    #if defined( USE_BIT_PACKING_TMP_LATTICE )
+        << " - working with bit-packed temporary lattice\n"
+    #endif
+    #if defined( USE_BIT_PACKING_LATTICE )
+        << " - working with bit-packed normal lattice\n"
+    #endif
+    #if defined( AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM )
+        << " - autoconfiguration is turned on\n"
+    #endif
+    #if defined( USE_ZCURVE_FOR_LATTICE )
+        << " - using z-curve spatial ordering for the lattices\n"
+    #endif
+    #if defined( USE_MOORE_CURVE_FOR_LATTICE )
+        << " - using moore curve instead of z-curve\n"
+    #endif
+    #if defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
+        << " - using two temporary lattice to clean one while the other is being used\n"
+    #endif
+    #if defined( USE_NBUFFERED_TMP_LATTICE )
+        << " - using " << mnLatticeTmpBuffers << " temporary lattices to calculate on a fresh one while the rest is still cleaning in another stream\n"
+    #endif
+    #if defined( USE_PERIODIC_MONOMER_SORTING )
+        << " - periodically sorting the monomers inside the array in respect to their spatial position every " << mnStepsBetweenSortings << "-th step to increase cache hit rates\n"
+    #endif
+    #if defined( USE_GPU_FOR_OVERHEAD )
+        << " - using GPU for initializations\n"
+    #endif
+    #if defined( CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION )
+        << " - using version " << CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION << " of checkFront\n"
+    #endif
+    #if defined( MAX_CONNECTIVITY )
+        << " - maximum connectivity is " << MAX_CONNECTIVITY << "\n"
+    #endif
+    #if defined( NONPERIODICITY )
+        << " - hardcoded non-periodic boundary conditions"
+    #else
+        << " - hardcoded periodic boundary conditions"
+    #endif
+    ;
 
     auto constexpr maxBoxSize = ( 1llu << ( CHAR_BIT * sizeof( T_CoordinateCuda ) ) );
     if ( mBoxX > maxBoxSize || mBoxY > maxBoxSize || mBoxZ > maxBoxSize )

@@ -2,6 +2,8 @@
 
 
 #include <chrono>                           // std::chrono::high_resolution_clock
+#include <climits>                          // CHAR_BIT
+#include <limits>                           // numeric_limits
 #include <iostream>
 
 #include <LeMonADE/updater/AbstractUpdater.h>
@@ -34,17 +36,30 @@ protected:
     MoleculesType   & molecules   ;
 
 private:
-#if defined( USE_UINT8_POSITIONS )
-    UpdaterGPUScBFM_AB_Type< uint8_t  > mUpdaterGpu  ;
-    UpdaterGPUScBFM_AB_Type< uint16_t > mUpdaterGpu16; // can't use uint8_t for boxes larger 256 on any side
-#else
-    //UpdaterGPUScBFM_AB_Type< int32_t > mUpdaterGpu;
-    UpdaterGPUScBFM_AB_Type< int16_t > mUpdaterGpu;
-#endif
+    /**
+     * can't use uint8_t for boxes larger 256 on any side, so choose
+     * automatically the correct type
+     * ... this is some fine stuff. I almost would have wrapped all the
+     * method bodies inside macros ... in order to copy paste them inside
+     * an if-else-statement
+     * But it makes sense, it inherits from all and then type casts it to
+     * call the correct methods and members even though all classes we
+     * inherit from basically shadow each other
+     * @see https://stackoverflow.com/questions/3422106/how-do-i-select-a-member-variable-with-a-type-parameter
+     */
+    struct WrappedTemplatedUpdaters :
+        UpdaterGPUScBFM_AB_Type< uint8_t  >,
+        UpdaterGPUScBFM_AB_Type< uint16_t >,
+        UpdaterGPUScBFM_AB_Type< int16_t  >,
+        UpdaterGPUScBFM_AB_Type< int32_t  >
+    {};
+    WrappedTemplatedUpdaters mUpdatersGpu;
+
     int miGpuToUse;
     //! Number of Monte-Carlo Steps (mcs) to be executed (per GPU-call / Updater call)
     uint32_t mnSteps;
     SelectedLogger mLog;
+    bool mCanUseUint8Positions;
 
 protected:
     inline T_IngredientsType & getIngredients() { return mIngredients; }
@@ -72,7 +87,7 @@ public:
         mLog.  activate( "Benchmark" );
         mLog.deactivate( "Check"     );
         mLog.  activate( "Error"     );
-        mLog.deactivate( "Info"      );
+        mLog.  activate( "Info"      );
         mLog.  activate( "Stat"      );
         mLog.deactivate( "Warning"   );
     }
@@ -84,8 +99,14 @@ public:
      * UpdaterGPUScBFM_AB_Type.cu by itself and explicit template instantitation
      * over T_IngredientsType is basically impossible
      */
-    inline void initialize()
+    template< typename T_UCoordinateCuda >
+    inline void initializeUpdater()
     {
+        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda > & mUpdaterGpu = mUpdatersGpu;
+
+        mLog( "Info" ) << "Size of mUpdater: " << sizeof( mUpdaterGpu ) << " Byte\n";
+        mLog( "Info" ) << "Size of WrappedTemplatedUpdaters: " << sizeof( WrappedTemplatedUpdaters ) << " Byte\n";
+
         auto const tInit0 = std::chrono::high_resolution_clock::now();
 
         mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] Forwarding relevant paramters to GPU updater\n";
@@ -147,8 +168,11 @@ public:
      * some class inheriting from this class...
      * https://en.wikipedia.org/wiki/Virtual_function
      */
-    inline bool execute()
+    template< typename T_UCoordinateCuda >
+    inline bool executeUpdater()
     {
+        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda > & mUpdaterGpu = mUpdatersGpu;
+
         std::clock_t const t0 = std::clock();
 
         mLog( "Info" ) << "[" << __FILENAME__ << "] MCS:" << mIngredients.getMolecules().getAge() << "\n";
@@ -197,9 +221,46 @@ public:
         return true;
     }
 
-    inline void cleanup()
+    template< typename T_UCoordinateCuda >
+    inline void cleanupUpdater()
     {
+        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda > & mUpdaterGpu = mUpdatersGpu;
+
         mLog( "Info" ) << "[" << __FILENAME__ << "] cleanup\n";
         mUpdaterGpu.cleanup();
     }
+
+#if defined( USE_UINT8_POSITIONS )
+    inline void initialize()
+    {
+        auto const maxBoxSize = std::max( mIngredients.getBoxX(),
+            std::max( mIngredients.getBoxY(), mIngredients.getBoxZ() ) );
+        assert( maxBoxSize >= 0 );
+        mCanUseUint8Positions = maxBoxSize <= ( 1llu << ( CHAR_BIT * sizeof( uint8_t ) ) );
+        if ( mCanUseUint8Positions )
+            initializeUpdater< uint8_t >();
+        else
+            initializeUpdater< uint16_t >();
+    }
+
+    inline bool execute()
+    {
+        if ( mCanUseUint8Positions )
+            return executeUpdater< uint8_t >();
+        else
+            return executeUpdater< uint16_t >();
+    }
+
+    inline void cleanup()
+    {
+        if ( mCanUseUint8Positions )
+            cleanupUpdater< uint8_t >();
+        else
+            cleanupUpdater< uint16_t >();
+    }
+#else
+    inline void initialize(){     initializeUpdater< int32_t >(); }
+    inline bool execute   (){ return executeUpdater< int32_t >(); }
+    inline void cleanup   (){        cleanupUpdater< int32_t >(); }
+#endif
 };
