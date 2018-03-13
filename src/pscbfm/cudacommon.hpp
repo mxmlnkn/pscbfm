@@ -84,6 +84,70 @@ TMP_CUDAVECS_UI( int64_t, long  )
 #undef TMP_CUDAVECS_UI
 
 /**
+ * output iterator overloads for CUDA types
+ * @see http://www.icl.utk.edu/~mgates3/docs/cuda.html
+ * unsigned and signed types ranging from 1 to 4 elements ranging
+ * from char, short, int to long and float
+ *
+ * char1, uchar1, short1, ushort1, int1, uint1, long1, ulong1, float1
+ * char2, uchar2, short2, ushort2, int2, uint2, long2, ulong2, float2
+ * char3, uchar3, short3, ushort3, int3, uint3, long3, ulong3, float3
+ * char4, uchar4, short4, ushort4, int4, uint4, long4, ulong4, float4
+ * longlong1, ulonglong1, double1
+ * longlong2, ulonglong2, double2
+ *
+ * 9*4+6 = 42 functions ... the macro madness still takes up 36 lines
+ * and is arguably harder to read, but in my opinion it reduces
+ * copy paste replace errors immensely :/ and it still is shorter compared
+ * to 84 lines when doing header and body on two lines although I could
+ * just use a macro to shorten the header ... meh
+ *
+ * use unary + operator to case all type to at least int so that char won't
+ * char won't be printed as ascii char
+ * @see https://stackoverflow.com/a/29712746/2191065
+ */
+#define TMP_PRINT_CUDA_VECS_HEADER(T)\
+inline std::ostream & operator<<( std::ostream & out, T const & v )
+#define TMP_PRINT_CUDA_VECS1_BODY(T) { out << v.x; return out; }
+#define TMP_PRINT_CUDA_VECS2_BODY(T) { out << "(" << +v.x << "," << +v.y << ")"; return out; }
+#define TMP_PRINT_CUDA_VECS3_BODY(T) { out << "(" << +v.x << "," << +v.y << "," << +v.z << ")"; return out; }
+#define TMP_PRINT_CUDA_VECS4_BODY(T) { out << "(" << +v.x << "," << +v.y << "," << +v.z << "," << +v.w << ")"; return out; }
+#define TMP_PRINT_CUDA_VECS_ALL2(T)\
+TMP_PRINT_CUDA_VECS_HEADER(T##1) TMP_PRINT_CUDA_VECS1_BODY(T) \
+TMP_PRINT_CUDA_VECS_HEADER(T##2) TMP_PRINT_CUDA_VECS2_BODY(T)
+#define TMP_PRINT_CUDA_VECS_ALL4(T)\
+TMP_PRINT_CUDA_VECS_HEADER(T##1) TMP_PRINT_CUDA_VECS1_BODY(T) \
+TMP_PRINT_CUDA_VECS_HEADER(T##2) TMP_PRINT_CUDA_VECS2_BODY(T) \
+TMP_PRINT_CUDA_VECS_HEADER(T##3) TMP_PRINT_CUDA_VECS3_BODY(T) \
+TMP_PRINT_CUDA_VECS_HEADER(T##4) TMP_PRINT_CUDA_VECS4_BODY(T)
+#define TMP_PRINT_CUDA_VECS_SIGNED_UNSIGNED(T)\
+TMP_PRINT_CUDA_VECS_ALL4(T)\
+TMP_PRINT_CUDA_VECS_ALL4(u##T)
+TMP_PRINT_CUDA_VECS_SIGNED_UNSIGNED(char)
+TMP_PRINT_CUDA_VECS_SIGNED_UNSIGNED(short)
+TMP_PRINT_CUDA_VECS_SIGNED_UNSIGNED(int)
+TMP_PRINT_CUDA_VECS_SIGNED_UNSIGNED(long)
+TMP_PRINT_CUDA_VECS_ALL4(float)
+TMP_PRINT_CUDA_VECS_ALL2(double)
+TMP_PRINT_CUDA_VECS_ALL2(longlong)
+TMP_PRINT_CUDA_VECS_ALL2(ulonglong)
+#undef TMP_PRINT_CUDA_VECS_SIGNED_UNSIGNED
+#undef TMP_PRINT_CUDA_VECS_ALL4
+#undef TMP_PRINT_CUDA_VECS_ALL2
+#undef TMP_PRINT_CUDA_VECS1_BODY
+#undef TMP_PRINT_CUDA_VECS2_BODY
+#undef TMP_PRINT_CUDA_VECS3_BODY
+#undef TMP_PRINT_CUDA_VECS4_BODY
+#undef TMP_PRINT_CUDA_VECS_HEADER
+
+/**
+ * @todo in the same manner overload arithmetic operators and unary +- ops
+ *       (can't just use template specialization I think, as it would capture
+ *        many unwanted types :( ???
+ */
+
+
+/**
  * Some debug output for understanding compilation
  * @see http://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/index.html#cuda-arch
  * Sources get compiled two times __CUDA_ARCH__
@@ -1723,6 +1787,75 @@ inline bool inRange( T_Value const & x )
                ( std::isnan(x) && std::numeric_limits< Range >::has_quiet_NaN ) ||
                ( std::isinf(x) && std::numeric_limits< Range >::has_infinity );
     }
+}
+
+#include <type_traits>
+#include <typeinfo>
+#include <memory>
+#include <string>
+#include <cstdlib>
+
+/**
+ * @see https://stackoverflow.com/questions/81870/is-it-possible-to-print-a-variables-type-in-standard-c
+ */
+template< class T >
+inline std::string getTypeNameString( void )
+{
+    typedef typename std::remove_reference<T>::type TR;
+    std::unique_ptr<char, void(*)(void*)> own( nullptr, std::free );
+    std::string r = own != nullptr ? own.get() : typeid(TR).name();
+    if (std::is_const<TR>::value)
+        r += " const";
+    if (std::is_volatile<TR>::value)
+        r += " volatile";
+    if (std::is_lvalue_reference<T>::value)
+        r += " &";
+    else if (std::is_rvalue_reference<T>::value)
+        r += " &&";
+    return r;
+}
+
+/**
+ * inline static ... lol, I love template programming ...
+ * It's static because we want to have access without creating a new object
+ * for the struct, but we want it inline, because this is a header, else
+ * we would possibly have multiple definition errors in linking stage
+ * inline static gives multiple definition errors though ... as does static only :(
+ * meh, just create a object, don't care if I have to write
+ * StdintTypeString<T>().getValue() ... but then I can template the function
+ * directly... The struct plus static member is just for constexpr purposes
+ * Plus that version also throws multiple definition errors ...
+ * !!! Not only the declaration, but also all template specializations need to
+ *     be declared inline -.-
+ */
+template< typename T > struct StdintTypeString{ inline std::string getValue( void ); };
+template< typename T > inline std::string StdintTypeString<T>::getValue( void ){ return ""; }
+#define TMP_STDINTTYPESTRING(T) template<> inline std::string StdintTypeString<T>::getValue( void ){ return #T; }
+#define TMP2_STDINTTYPESTRING(T) TMP_STDINTTYPESTRING(T) TMP_STDINTTYPESTRING(u##T)
+#define TMP3_STDINTTYPESTRING(T) TMP2_STDINTTYPESTRING(T) TMP2_STDINTTYPESTRING(T##&)
+TMP2_STDINTTYPESTRING( int8_t );
+TMP2_STDINTTYPESTRING( int16_t );
+TMP2_STDINTTYPESTRING( int32_t );
+TMP2_STDINTTYPESTRING( int64_t );
+#undef TMP3_STDINTTYPESTRING
+#undef TMP2_STDINTTYPESTRING
+#undef TMP_STDINTTYPESTRING
+
+template< class T >
+inline std::string getTypeInfoString( void )
+{
+    std::stringstream str;
+    str << getTypeNameString<T>();
+    if ( std::string( StdintTypeString<T>().getValue() ) != "" )
+        str << ", " << StdintTypeString<T>().getValue();
+    str //<< ", " << ( std::numeric_limits<T>::is_signed ? "signed" : "unsigned" )
+        /* min, max prints literally char for (u)int8, but the unary + operator
+         * trick does not work, because it returns int4,... for CUDA types
+         * which do not have unary + overloaded ... :( */
+        //<< ", min:" << std::numeric_limits<T>::min()
+        //<< ", max:" << std::numeric_limits<T>::max()
+        << ", size:" << sizeof(T) << "B";
+    return str.str();
 }
 
 #endif

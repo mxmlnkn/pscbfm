@@ -7,36 +7,6 @@
 
 #include "UpdaterGPUScBFM_AB_Type.h"
 
-//#define USE_THRUST_FILL
-#define USE_BIT_PACKING_TMP_LATTICE
-//#define USE_BIT_PACKING_LATTICE
-//#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
-#define USE_ZCURVE_FOR_LATTICE
-//#define USE_MOORE_CURVE_FOR_LATTICE
-#define USE_UINT8_POSITIONS
-#ifdef USE_UINT8_POSITIONS
-#endif
-//#define USE_DOUBLE_BUFFERED_TMP_LATTICE
-#if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
-#   define USE_NBUFFERED_TMP_LATTICE
-#endif
-#define USE_PERIODIC_MONOMER_SORTING
-#define USE_GPU_FOR_OVERHEAD
-
-
-/**
- * working combinations:
- *   - nothing set (3.96109s)
- *   - USE_ZCURVE_FOR_LATTICE (2.18166s)
- *   - USE_BIT_PACKING_TMP_LATTICE + USE_ZCURVE_FOR_LATTICE (1.56671s)
- * not working:
- *   - USE_BIT_PACKING_TMP_LATTICE
- *   - USE_MOORE_CURVE_FOR_LATTICE
- * @todo using USE_BIT_PACKING_TMP_LATTICE without USE_ZCURVE_FOR_LATTICE
- *       does not work! The error must be in checkFront ... ?
- * @todo USE_MOORE_CURVE_FOR_LATTICE does not work, neither with nor without
- *       USE_BIT_PACKING_TMP_LATTICE
- */
 
 #include <algorithm>                        // fill, sort, count
 #include <chrono>                           // std::chrono::high_resolution_clock
@@ -1388,12 +1358,12 @@ struct DeleteMirroredVector
     {
         if ( p != NULL )
         {
-            //std::cerr << "Free MirroredVector " << name << " at " << (void*) p;
+            std::cerr
+                << "Free MirroredVector " << name << " at " << (void*) p
+                << " which holds " << prettyPrintBytes( p->nBytes ) << "\n";
             nBytesFreed += p->nBytes;
-            //std::cerr << " which holds " << p->nBytes;
             delete p;
             p = NULL;
-            //std::cerr << "\n";
         }
     }
 
@@ -1740,7 +1710,7 @@ __global__ void kernelSplitMonomerPositions
             T_UCoordinateCuda( r.x & dcBoxXM1 ),
             T_UCoordinateCuda( r.y & dcBoxYM1 ),
             T_UCoordinateCuda( r.z & dcBoxZM1 ),
-            dpPolymerSystemSorted[ iNew ].w
+            T_UCoordinateCuda( dpPolymerSystemSorted[ iNew ].w )
         };
         dpPolymerSystemSorted[ iNew ] = rlo;
         T_Coordinates rhi = {
@@ -2340,6 +2310,31 @@ void UpdaterGPUScBFM_AB_Type::initialize( void )
         << " resulting in a filling rate of "
         << mnAllMonomers / double( mBoxX * mBoxY * mBoxZ ) << "\n";
         mLog( "Stats" ) << msg.str();
+    }
+
+    mLog( "Info" )
+    << "T_BoxSize          = " << getTypeInfoString< T_BoxSize          >() << "\n"
+    << "T_Coordinate       = " << getTypeInfoString< T_Coordinate       >() << "\n"
+    << "T_CoordinateCuda   = " << getTypeInfoString< T_CoordinateCuda   >() << "\n"
+    << "T_UCoordinateCuda  = " << getTypeInfoString< T_UCoordinateCuda  >() << "\n"
+    << "T_Coordinates      = " << getTypeInfoString< T_Coordinates      >() << "\n"
+    << "T_CoordinatesCuda  = " << getTypeInfoString< T_CoordinatesCuda  >() << "\n"
+    << "T_UCoordinatesCuda = " << getTypeInfoString< T_UCoordinatesCuda >() << "\n"
+    << "T_Color            = " << getTypeInfoString< T_Color            >() << "\n"
+    << "T_Flags            = " << getTypeInfoString< T_Flags            >() << "\n"
+    << "T_Id               = " << getTypeInfoString< T_Id               >() << "\n"
+    << "T_Lattice          = " << getTypeInfoString< T_Lattice          >() << "\n";
+
+    auto constexpr maxBoxSize = ( 1llu << ( CHAR_BIT * sizeof( T_CoordinateCuda ) ) );
+    if ( mBoxX > maxBoxSize || mBoxY > maxBoxSize || mBoxZ > maxBoxSize )
+    {
+        std::stringstream msg;
+        msg << "The box size is limited to " << maxBoxSize << " in each direction"
+            << ", because of the chosen type for T_Coordinate = "
+            << getTypeInfoString< T_Coordinate >() << ", but the chose box size is: ("
+            << mBoxX << "," << mBoxY << "," << mBoxZ << ")!\n"
+            << "Please change T_Coordinate to a larger type if you want to simulate this setup.";
+        throw std::runtime_error( msg.str() );
     }
 
     /**

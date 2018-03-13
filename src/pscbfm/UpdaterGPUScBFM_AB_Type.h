@@ -23,6 +23,36 @@
 
 
 
+//#define USE_THRUST_FILL
+#define USE_BIT_PACKING_TMP_LATTICE
+//#define USE_BIT_PACKING_LATTICE
+//#define AUTO_CONFIGURE_BEST_SETTINGS_FOR_PSCBFM_ALGORITHM
+#define USE_ZCURVE_FOR_LATTICE
+//#define USE_MOORE_CURVE_FOR_LATTICE
+#define USE_UINT8_POSITIONS
+//#define USE_DOUBLE_BUFFERED_TMP_LATTICE
+#if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
+#   define USE_NBUFFERED_TMP_LATTICE
+#endif
+#define USE_PERIODIC_MONOMER_SORTING
+#define USE_GPU_FOR_OVERHEAD
+
+
+/**
+ * working combinations:
+ *   - nothing set (3.96109s)
+ *   - USE_ZCURVE_FOR_LATTICE (2.18166s)
+ *   - USE_BIT_PACKING_TMP_LATTICE + USE_ZCURVE_FOR_LATTICE (1.56671s)
+ * not working:
+ *   - USE_BIT_PACKING_TMP_LATTICE
+ *   - USE_MOORE_CURVE_FOR_LATTICE
+ * @todo using USE_BIT_PACKING_TMP_LATTICE without USE_ZCURVE_FOR_LATTICE
+ *       does not work! The error must be in checkFront ... ?
+ * @todo USE_MOORE_CURVE_FOR_LATTICE does not work, neither with nor without
+ *       USE_BIT_PACKING_TMP_LATTICE
+ */
+
+
 /**
  * When not reordering the neighbor information as struct of array,
  * then increasing this leads to performance degradataion!
@@ -141,11 +171,19 @@ public:
      */
     using T_BoxSize          = uint64_t; // uint32_t // should be unsigned!
     using T_Coordinate       = int32_t; // int64_t // should be signed!
-    using T_CoordinateCuda   = int8_t; // int32_t (int8_t, uint8_t does not work for a 256^3 box :S ??? )
+#if defined( USE_UINT8_POSITIONS )
+    using T_CoordinateCuda   = int8_t; // int16_t, but only if box size <= 256 :S @todo choose automatically depending on box size -> template parameter -> need to template all kernels and then basically make a large if for int8 vs. int16 limiting box size to 65536 which is more than enough at least for 3D ...
     using T_UCoordinateCuda  = std::make_unsigned< T_CoordinateCuda >::type;
+#else
+    /* we have to used signed types for calculations, else we get wrong
+     * results without overflow checks! */
+    using T_CoordinateCuda   = int32_t;
+    using T_UCoordinateCuda  = T_CoordinateCuda;
+#endif
     using T_Coordinates      = CudaVec4< T_Coordinate      >::value_type;
     using T_CoordinatesCuda  = CudaVec4< T_CoordinateCuda  >::value_type;
     using T_UCoordinatesCuda = CudaVec4< T_UCoordinateCuda >::value_type;
+
     /* could also be uint8_t if you know you only have 256 different
      * species at maximum. For the autocoloring this is implicitly true,
      * but not so if the user manually specifies colors! */
