@@ -171,7 +171,7 @@ struct MonomerEdges
     uint32_t neighborIds[ MAX_CONNECTIVITY ];
 };
 
-template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
+template< typename T_UCoordinateCuda >
 class UpdaterGPUScBFM_AB_Type
 {
 public:

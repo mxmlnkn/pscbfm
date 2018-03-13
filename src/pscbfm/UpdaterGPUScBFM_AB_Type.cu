@@ -46,10 +46,6 @@
 #   define USE_BIT_PACKING
 #endif
 
-#define TMP_DECLARE_UPDATER_METHOD( RETURN ) \
-template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ > \
-RETURN UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda, T_IsPeriodicX, T_IsPeriodicY, T_IsPeriodicZ >
-
 
 
 /**
@@ -61,11 +57,11 @@ namespace {
 
 
 /* shorten full type names for kernels (assuming these are independent of the template parameter) */
-using T_Flags            = UpdaterGPUScBFM_AB_Type< uint8_t,0,0,0 >::T_Flags      ;
-using T_Lattice          = UpdaterGPUScBFM_AB_Type< uint8_t,0,0,0 >::T_Lattice    ;
-using T_Coordinate       = UpdaterGPUScBFM_AB_Type< uint8_t,0,0,0 >::T_Coordinate ;
-using T_Coordinates      = UpdaterGPUScBFM_AB_Type< uint8_t,0,0,0 >::T_Coordinates;
-using T_Id               = UpdaterGPUScBFM_AB_Type< uint8_t,0,0,0 >::T_Id         ;
+using T_Flags            = UpdaterGPUScBFM_AB_Type< uint8_t >::T_Flags      ;
+using T_Lattice          = UpdaterGPUScBFM_AB_Type< uint8_t >::T_Lattice    ;
+using T_Coordinate       = UpdaterGPUScBFM_AB_Type< uint8_t >::T_Coordinate ;
+using T_Coordinates      = UpdaterGPUScBFM_AB_Type< uint8_t >::T_Coordinates;
+using T_Id               = UpdaterGPUScBFM_AB_Type< uint8_t >::T_Id         ;
 
 
 /* 512=8^3 for a range of bonds per direction of [-4,3] */
@@ -1298,7 +1294,8 @@ __global__ void kernelTreatOverflows
 
 } // end anonymous namespace with typedefs for kernels
 
-TMP_DECLARE_UPDATER_METHOD( T_Id )::linearizeBoxVectorIndex
+template< typename T_UCoordinateCuda >
+T_Id UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::linearizeBoxVectorIndex
 (
     T_Coordinate const & ix,
     T_Coordinate const & iy,
@@ -1331,7 +1328,8 @@ TMP_DECLARE_UPDATER_METHOD( T_Id )::linearizeBoxVectorIndex
     #endif
 }
 
-TMP_DECLARE_UPDATER_METHOD()::UpdaterGPUScBFM_AB_Type()
+template< typename T_UCoordinateCuda >
+UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::UpdaterGPUScBFM_AB_Type()
  : mStream                          ( 0    ),
    mAge                             ( 0    ),
    mnStepsBetweenSortings           ( 5000 ),
@@ -1412,7 +1410,8 @@ struct DeleteMirroredVector
 /**
  * Deletes everything which could and is allocated
  */
-TMP_DECLARE_UPDATER_METHOD( void )::destruct()
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::destruct()
 {
     DeleteMirroredVector deletePointer;
     deletePointer( mLatticeOut                     , "mLatticeOut"                      );
@@ -1432,21 +1431,17 @@ TMP_DECLARE_UPDATER_METHOD( void )::destruct()
     deletePointer( mNeighbors                      , "mNeighbors"                       );
     deletePointer( mNeighborsSorted                , "mNeighborsSorted"                 );
     deletePointer( mNeighborsSortedSizes           , "mNeighborsSortedSizes"            );
-    if ( deletePointer.nBytesFreed > 0 )
-    {
-        mLog( "Info" )
-            << "Freed a total of "
-            << prettyPrintBytes( deletePointer.nBytesFreed )
-            << " on GPU and host RAM.\n";
-    }
+    mLog( "Info" ) << "Freed a total of " << prettyPrintBytes( deletePointer.nBytesFreed ) << " on GPU and host RAM.\n";
 }
 
-TMP_DECLARE_UPDATER_METHOD()::~UpdaterGPUScBFM_AB_Type()
+template< typename T_UCoordinateCuda >
+UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::~UpdaterGPUScBFM_AB_Type()
 {
     this->destruct();
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::setGpu( int iGpuToUse )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setGpu( int iGpuToUse )
 {
     int nGpus;
     getCudaDeviceProperties( NULL, &nGpus, true /* print GPU information */ );
@@ -1463,8 +1458,25 @@ TMP_DECLARE_UPDATER_METHOD( void )::setGpu( int iGpuToUse )
     miGpuToUse = iGpuToUse;
 }
 
+#if 0
+{
+    /* a class helper for restructuring data */
+    template< typename >
+    class ShufflingVector
+    {
+        private:
+            size_t const n;
+            std::vector< size_t > miToiNew, miNewToi;
 
-TMP_DECLARE_UPDATER_METHOD( void )::initializeBondTable( void )
+        public:
+            inline ShufflingVector( size_t const & n )
+            :
+    }
+}
+#endif
+
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initializeBondTable( void )
 {
     /* create the BondTable and copy it to constant memory */
     bool * tmpForbiddenBonds = (bool*) malloc( sizeof( bool ) * 512 );
@@ -1508,7 +1520,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::initializeBondTable( void )
     */
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::initializeSpeciesSorting( void )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initializeSpeciesSorting( void )
 {
     mLog( "Info" ) << "Coloring graph ...\n";
     bool const bUniformColors = true; // setting this to true should yield more performance as the kernels are uniformly utilized
@@ -1781,7 +1794,8 @@ struct LinearizeBoxVectorIndexFunctor
  * @param[out] iToiNew just as the input, but after sorting spatially
  * @param[out] iNewToi
  */
-TMP_DECLARE_UPDATER_METHOD( void )::doSpatialSorting( void )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::doSpatialSorting( void )
 {
     auto const nThreads = 128;
     auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
@@ -1890,7 +1904,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::doSpatialSorting( void )
     CUDA_ERROR( cudaMemcpyAsync( mPolymerSystemSortedOld->gpu, mPolymerSystemSorted->gpu, mPolymerSystemSortedOld->nBytes, cudaMemcpyDeviceToDevice, mStream ) );
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::initializeSortedNeighbors( void )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initializeSortedNeighbors( void )
 {
     /* adjust neighbor IDs to new sorted PolymerSystem and also sort that array.
      * Bonds are not supposed to change, therefore we don't need to push and
@@ -2010,7 +2025,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::initializeSortedNeighbors( void )
 }
 
 
-TMP_DECLARE_UPDATER_METHOD( void )::initializeSortedMonomerPositions( void )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initializeSortedMonomerPositions( void )
 {
     /* sort groups into new array and save index mappings */
     if ( mPolymerSystemSorted             == NULL )mPolymerSystemSorted             = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
@@ -2084,7 +2100,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::initializeSortedMonomerPositions( void )
 #endif
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::initializeLattices( void )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initializeLattices( void )
 {
     if ( mLatticeOut != NULL || mLatticeTmp != NULL )
     {
@@ -2180,7 +2197,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::initializeLattices( void )
     #endif
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::checkMonomerReorderMapping( void )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::checkMonomerReorderMapping( void )
 {
     if ( miToiNew->nElements != mnAllMonomers )
     {
@@ -2334,7 +2352,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::checkMonomerReorderMapping( void )
     }
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::initialize( void )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initialize( void )
 {
     if ( mLog( "Stats" ).isActive() )
     {
@@ -2457,13 +2476,15 @@ TMP_DECLARE_UPDATER_METHOD( void )::initialize( void )
 }
 
 
-TMP_DECLARE_UPDATER_METHOD( void )::copyBondSet
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::copyBondSet
 ( int dx, int dy, int dz, bool bondForbidden )
 {
     mForbiddenBonds[ linearizeBondVectorIndex(dx,dy,dz) ] = bondForbidden;
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::setNrOfAllMonomers( T_Id const rnAllMonomers )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setNrOfAllMonomers( T_Id const rnAllMonomers )
 {
     if ( mnAllMonomers != 0 )
     {
@@ -2480,7 +2501,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::setNrOfAllMonomers( T_Id const rnAllMonomers
     std::memset( mNeighbors->host, 0, mNeighbors->nBytes );
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::setPeriodicity
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setPeriodicity
 (
     bool const isPeriodicX,
     bool const isPeriodicY,
@@ -2507,9 +2529,11 @@ TMP_DECLARE_UPDATER_METHOD( void )::setPeriodicity
     }
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::setAttribute( T_Id i, int32_t attribute ){ mAttributeSystem.at(i) = attribute; }
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setAttribute( T_Id i, int32_t attribute ){ mAttributeSystem.at(i) = attribute; }
 
-TMP_DECLARE_UPDATER_METHOD( void )::setMonomerCoordinates
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setMonomerCoordinates
 (
     T_Id          const i,
     T_Coordinate  const x,
@@ -2539,12 +2563,12 @@ TMP_DECLARE_UPDATER_METHOD( void )::setMonomerCoordinates
     mPolymerSystem->host[i].y = y;
     mPolymerSystem->host[i].z = z;
 }
+template< typename T_UCoordinateCuda > int32_t UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::getMonomerPositionInX( T_Id i ){ return mPolymerSystem->host[i].x; }
+template< typename T_UCoordinateCuda > int32_t UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::getMonomerPositionInY( T_Id i ){ return mPolymerSystem->host[i].y; }
+template< typename T_UCoordinateCuda > int32_t UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::getMonomerPositionInZ( T_Id i ){ return mPolymerSystem->host[i].z; }
 
-TMP_DECLARE_UPDATER_METHOD( int32_t )::getMonomerPositionInX( T_Id i ){ return mPolymerSystem->host[i].x; }
-TMP_DECLARE_UPDATER_METHOD( int32_t )::getMonomerPositionInY( T_Id i ){ return mPolymerSystem->host[i].y; }
-TMP_DECLARE_UPDATER_METHOD( int32_t )::getMonomerPositionInZ( T_Id i ){ return mPolymerSystem->host[i].z; }
-
-TMP_DECLARE_UPDATER_METHOD( void )::setConnectivity
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setConnectivity
 (
     T_Id const iMonomer1,
     T_Id const iMonomer2
@@ -2564,7 +2588,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::setConnectivity
     mNeighbors->host[ iMonomer1 ].neighborIds[ iNew ] = iMonomer2;
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::setLatticeSize
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::setLatticeSize
 (
     T_BoxSize const boxX,
     T_BoxSize const boxY,
@@ -2620,7 +2645,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::setLatticeSize
  * overflow and/or is counted into mviPolymerSystemSortedVirtualBox if it
  * happened because of the periodic boundary condition of the box.
  */
-TMP_DECLARE_UPDATER_METHOD( void )::findAndRemoveOverflows( bool copyToHost )
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::findAndRemoveOverflows( bool copyToHost )
 {
     /**
      * find jumps and "deapply" them. We just have to find jumps larger than
@@ -2714,7 +2740,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::findAndRemoveOverflows( bool copyToHost )
  * "In my tests, for sizes ranging from 8 MB to 32 MB, the cost for a new[]/delete[] pair averaged about 7.5 μs (microseconds), split into ~5.0 μs for the allocation and ~2.5 μs for the free."
  *  => ~40k cycles
  */
-TMP_DECLARE_UPDATER_METHOD( void )::checkSystem() const
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::checkSystem() const
 {
     if ( ! mLog.isActive( "Check" ) )
         return;
@@ -2826,7 +2853,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::checkSystem() const
     }
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::runSimulationOnGPU
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
 (
     uint32_t const nMonteCarloSteps
 )
@@ -3272,7 +3300,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::runSimulationOnGPU
     }
 }
 
-TMP_DECLARE_UPDATER_METHOD( void )::doCopyBack()
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::doCopyBack()
 {
     mtCopyBack0 = std::chrono::high_resolution_clock::now();
 
@@ -3362,7 +3391,8 @@ TMP_DECLARE_UPDATER_METHOD( void )::doCopyBack()
  * setNrOfAllMonomers and initialize. Currently this includes all allocs,
  * so we can simply call destruct.
  */
-TMP_DECLARE_UPDATER_METHOD( void )::cleanup()
+template< typename T_UCoordinateCuda >
+void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::cleanup()
 {
     this->destruct();
 
@@ -3370,23 +3400,9 @@ TMP_DECLARE_UPDATER_METHOD( void )::cleanup()
     cudaProfilerStop();
 }
 
-#undef TMP_DECLARE_UPDATER_METHOD
 
-
-
-/* Note that each explicit instantiation adds 400kB to the executable ...
- * Compile-time also increases to unhealthy amounts :( */
-#define TMP_INSTANTIATE_UPDATERGPUSCBFM_ALL_PERIODS(T) \
-template class UpdaterGPUScBFM_AB_Type< T, false, false, false >; \
-template class UpdaterGPUScBFM_AB_Type< T, false, false,  true >; \
-template class UpdaterGPUScBFM_AB_Type< T, false,  true, false >; \
-template class UpdaterGPUScBFM_AB_Type< T, false,  true,  true >; \
-template class UpdaterGPUScBFM_AB_Type< T,  true, false, false >; \
-template class UpdaterGPUScBFM_AB_Type< T,  true, false,  true >; \
-template class UpdaterGPUScBFM_AB_Type< T,  true,  true, false >; \
-template class UpdaterGPUScBFM_AB_Type< T,  true,  true,  true >;
-TMP_INSTANTIATE_UPDATERGPUSCBFM_ALL_PERIODS( uint8_t  )
-TMP_INSTANTIATE_UPDATERGPUSCBFM_ALL_PERIODS( uint16_t )
-TMP_INSTANTIATE_UPDATERGPUSCBFM_ALL_PERIODS( int16_t  )
-TMP_INSTANTIATE_UPDATERGPUSCBFM_ALL_PERIODS( int32_t  )
-#undef TMP_INSTANTIATE_UPDATERGPUSCBFM_ALL_PERIODS
+template class UpdaterGPUScBFM_AB_Type< uint8_t  >;
+template class UpdaterGPUScBFM_AB_Type< uint16_t >;
+template class UpdaterGPUScBFM_AB_Type< uint32_t >;
+template class UpdaterGPUScBFM_AB_Type<  int16_t >;
+template class UpdaterGPUScBFM_AB_Type<  int32_t >;

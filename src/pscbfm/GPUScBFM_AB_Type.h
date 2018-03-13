@@ -48,20 +48,10 @@ private:
      * @see https://stackoverflow.com/questions/3422106/how-do-i-select-a-member-variable-with-a-type-parameter
      */
     struct WrappedTemplatedUpdaters :
-        #define TMP_WRAPPED_UPDATERS_PERIODS(T)            \
-        UpdaterGPUScBFM_AB_Type< T, false, false, false >, \
-        UpdaterGPUScBFM_AB_Type< T, false, false,  true >, \
-        UpdaterGPUScBFM_AB_Type< T, false,  true, false >, \
-        UpdaterGPUScBFM_AB_Type< T, false,  true,  true >, \
-        UpdaterGPUScBFM_AB_Type< T,  true, false, false >, \
-        UpdaterGPUScBFM_AB_Type< T,  true, false,  true >, \
-        UpdaterGPUScBFM_AB_Type< T,  true,  true, false >, \
-        UpdaterGPUScBFM_AB_Type< T,  true,  true,  true >
-        TMP_WRAPPED_UPDATERS_PERIODS( uint8_t  ),
-        TMP_WRAPPED_UPDATERS_PERIODS( uint16_t ),
-        TMP_WRAPPED_UPDATERS_PERIODS( int16_t  ),
-        TMP_WRAPPED_UPDATERS_PERIODS( int32_t  )
-        #undef TMP_WRAPPED_UPDATERS_TYPES
+        UpdaterGPUScBFM_AB_Type< uint8_t  >,
+        UpdaterGPUScBFM_AB_Type< uint16_t >,
+        UpdaterGPUScBFM_AB_Type< int16_t  >,
+        UpdaterGPUScBFM_AB_Type< int32_t  >
     {};
     WrappedTemplatedUpdaters mUpdatersGpu;
 
@@ -109,10 +99,10 @@ public:
      * UpdaterGPUScBFM_AB_Type.cu by itself and explicit template instantitation
      * over T_IngredientsType is basically impossible
      */
-    template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
-    inline bool initializeUpdater()
+    template< typename T_UCoordinateCuda >
+    inline void initializeUpdater()
     {
-        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda, T_IsPeriodicX, T_IsPeriodicY, T_IsPeriodicZ > & mUpdaterGpu = mUpdatersGpu;
+        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda > & mUpdaterGpu = mUpdatersGpu;
 
         mLog( "Info" ) << "Size of mUpdater: " << sizeof( mUpdaterGpu ) << " Byte\n";
         mLog( "Info" ) << "Size of WrappedTemplatedUpdaters: " << sizeof( WrappedTemplatedUpdaters ) << " Byte\n";
@@ -171,8 +161,6 @@ public:
         std::stringstream sBuffered;
         sBuffered << "tInit = " << std::chrono::duration<double>( tInit1 - tInit0 ).count() << "s\n";
         mLog( "Benchmark" ) << sBuffered.str();
-
-        return true;
     }
 
     /**
@@ -180,10 +168,10 @@ public:
      * some class inheriting from this class...
      * https://en.wikipedia.org/wiki/Virtual_function
      */
-    template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
+    template< typename T_UCoordinateCuda >
     inline bool executeUpdater()
     {
-        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda, T_IsPeriodicX, T_IsPeriodicY, T_IsPeriodicZ > & mUpdaterGpu = mUpdatersGpu;
+        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda > & mUpdaterGpu = mUpdatersGpu;
 
         std::clock_t const t0 = std::clock();
 
@@ -230,59 +218,49 @@ public:
             sBuffered << "tCopyback = " << std::chrono::duration<double>( tCopyBack1 - tCopyBack0 ).count() << "s\n";
             mLog( "Benchmark" ) << sBuffered.str();
         }
-
         return true;
     }
 
-    template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
-    inline bool cleanupUpdater()
+    template< typename T_UCoordinateCuda >
+    inline void cleanupUpdater()
     {
-        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda, T_IsPeriodicX, T_IsPeriodicY, T_IsPeriodicZ > & mUpdaterGpu = mUpdatersGpu;
+        UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda > & mUpdaterGpu = mUpdatersGpu;
 
         mLog( "Info" ) << "[" << __FILENAME__ << "] cleanup\n";
         mUpdaterGpu.cleanup();
-
-        return true;
     }
 
-    #if defined( USE_UINT8_POSITIONS )
-        #define TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME, PX, PY, PZ ) \
-        ( mCanUseUint8Positions                                                 \
-          ? NAME##Updater< uint8_t , PX, PY, PZ >()                             \
-          : NAME##Updater< uint16_t, PX, PY, PZ >() )
-    #else
-        #define TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME, PX, PY, PZ ) NAME##Updater< int32_t, PX, PY, PZ >()
-    #endif
-    #define TMP_CHOOSE_CORRECT_TEMPLATED_METHOD( NAME )     \
-    bool result = true;                                     \
-    auto const p = ( mIngredients.isPeriodicX() << 2 ) +    \
-                   ( mIngredients.isPeriodicY() << 1 ) +    \
-                     mIngredients.isPeriodicZ();            \
-    switch ( p )                                            \
-    {                                                       \
-        case 0: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME, false, false, false ); break; \
-        case 1: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME, false, false,  true ); break; \
-        case 2: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME, false,  true, false ); break; \
-        case 3: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME, false,  true,  true ); break; \
-        case 4: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME,  true, false, false ); break; \
-        case 5: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME,  true, false,  true ); break; \
-        case 6: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME,  true,  true, false ); break; \
-        case 7: result = TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE( NAME,  true,  true,  true ); break; \
-        default: assert( false );                           \
-    }
-
+#if defined( USE_UINT8_POSITIONS )
     inline void initialize()
     {
         auto const maxBoxSize = std::max( mIngredients.getBoxX(),
             std::max( mIngredients.getBoxY(), mIngredients.getBoxZ() ) );
         assert( maxBoxSize >= 0 );
-        mCanUseUint8Positions = (unsigned int) maxBoxSize <= ( 1llu << ( CHAR_BIT * sizeof( uint8_t ) ) );
-        TMP_CHOOSE_CORRECT_TEMPLATED_METHOD( initialize );
-        (void) result; /* quelch unused warnings */
+        mCanUseUint8Positions = maxBoxSize <= ( 1llu << ( CHAR_BIT * sizeof( uint8_t ) ) );
+        if ( mCanUseUint8Positions )
+            initializeUpdater< uint8_t >();
+        else
+            initializeUpdater< uint16_t >();
     }
-    inline bool execute(){ TMP_CHOOSE_CORRECT_TEMPLATED_METHOD( execute ); return result; }
-    inline void cleanup(){ TMP_CHOOSE_CORRECT_TEMPLATED_METHOD( cleanup ); (void) result; }
 
-    #undef TMP_CHOOSE_CORRECT_TEMPLATED_METHOD_BY_TYPE
-    #undef TMP_CHOOSE_CORRECT_TEMPLATED_METHOD
+    inline bool execute()
+    {
+        if ( mCanUseUint8Positions )
+            return executeUpdater< uint8_t >();
+        else
+            return executeUpdater< uint16_t >();
+    }
+
+    inline void cleanup()
+    {
+        if ( mCanUseUint8Positions )
+            cleanupUpdater< uint8_t >();
+        else
+            cleanupUpdater< uint16_t >();
+    }
+#else
+    inline void initialize(){     initializeUpdater< int32_t >(); }
+    inline bool execute   (){ return executeUpdater< int32_t >(); }
+    inline void cleanup   (){        cleanupUpdater< int32_t >(); }
+#endif
 };
