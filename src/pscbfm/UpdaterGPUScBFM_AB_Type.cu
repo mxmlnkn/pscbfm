@@ -927,7 +927,7 @@ namespace {
  *       Why are there three kernels instead of just one
  *        -> for global synchronization
  */
-template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
+template< typename T_UCoordinateCuda, class RNG, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
 __global__ void kernelSimulationScBFMCheckSpecies
 (
     typename CudaVec4< T_UCoordinateCuda >::value_type
@@ -939,7 +939,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     uint32_t            const              rNeighborsPitchElements ,
     uint8_t     const * const              dpNeighborsSizes        ,
     T_Id                const              nMonomers               ,
-    uint32_t            const              rSeed                   ,
+    uint64_t            const              rSeed                   ,
+    uint64_t            const              rGlobalIteration        ,
+    typename RNG::GlobalState *            rGlobalRngStates        ,
     cudaTextureObject_t const              texLatticeRefOut
 )
 {
@@ -953,8 +955,16 @@ __global__ void kernelSimulationScBFMCheckSpecies
         //int4 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z, 0 }; // not faster nor slower
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
         if ( iGrid % 1 == 0 ) // 12 = floor( log(2^32) / log(6) )
-            rn = hash( hash( iMonomer ) ^ rSeed );
-        uint32_t const direction = rn % uint32_t(6); rn /= uint32_t(6);
+        {
+            RNG rng;
+            if ( RNG::needsGlobalState() ) rng.setGlobalState( rGlobalRngStates  );
+            if ( RNG::needsIteration  () ) rng.setIteration  ( rGlobalIteration  );
+            if ( RNG::needsSubsequence() ) rng.setSubsequence( iMonomer          );
+            if ( RNG::needsSeed       () ) rng.setSeed       ( rSeed             );
+            rn = rng.rng32();
+        }
+
+        int const direction = rn % 6;
         T_Flags properties = 0;
 
          /* select random direction. Do this with bitmasking instead of lookup ??? */
@@ -1017,7 +1027,9 @@ __global__ void kernelSimulationScBFMCheckSpecies
     }
 }
 
-
+/**
+ * Only gives correct results with the original hash rng!
+ */
 template< typename T_UCoordinateCuda, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
 __global__ void kernelCountFilteredCheck
 (
@@ -2500,7 +2512,7 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initialize( void )
     /* xorwow */
     mSeedXorwow = 781241814;
     //mSeedXorwow      = randomNumbers.r250_rand32();
-    mRngVectorXorwow = new MirroredVector< RNGload::GlobalState >( mnAllMonomers );
+    mRngVectorXorwow = new MirroredVector< Rngs::RNGload::GlobalState >( mnAllMonomers );
     CURAND_CALL( curandCreateGenerator( & mGenXorwow, CURAND_RNG_PSEUDO_DEFAULT ) );
     cudaStreamCreate( &mStreamXorwow1 );
     cudaStreamCreate( &mStreamXorwow2 );
@@ -2510,9 +2522,9 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initialize( void )
     /* pcg */
     mSeedPcg = 781241814;
     //mSeedPcg = randomNumbers.r250_rand32();
-    mStateVectorPcg = new MirroredVector< PCG::State >( mnAllMonomers );
+    mStateVectorPcg = new MirroredVector< Rngs::PCG::State >( mnAllMonomers );
     for ( unsigned int i = 0; i < mnAllMonomers; ++i )
-            mStateVectorPcg->host[i] = PCG::State( mSeedPcg, i );
+            mStateVectorPcg->host[i] = Rngs::PCG::State( mSeedPcg, i );
     mStateVectorPcg->push();
 
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
@@ -3029,6 +3041,7 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
          *  - each particle could be touched, not just one group */
         for ( uint32_t iSubStep = 0; iSubStep < nSpecies; ++iSubStep )
         {
+            auto const currentAge = mAge + iStep * nSpecies + iSubStep;
             #if defined( USE_NBUFFERED_TMP_LATTICE )
                 auto const iStepTotal = iStep * nSpecies + iSubStep;
                 auto const iOffsetLatticeTmp = ( iStepTotal % mnLatticeTmpBuffers )
@@ -3060,8 +3073,8 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
                 mLog( "Info" ) << "Calling Check-Kernel for species " << iSpecies << " for uint32_t * " << (void*) mNeighborsSorted->gpu << " + " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " = " << (void*)( mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) ) << " with pitch " << mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ) << "\n";
             */
 
-            #define TMP_CALL_KERNEL_CHECK( PX, PY, PZ )                        \
-            kernelSimulationScBFMCheckSpecies< T_UCoordinateCuda, PX, PY, PZ > \
+            #define TMP_CALL_KERNEL_CHECK( RNG, PX, PY, PZ )                   \
+            kernelSimulationScBFMCheckSpecies< T_UCoordinateCuda, RNG, PX, PY, PZ > \
             <<< nBlocks, nThreads, 0, mStream >>>(                             \
                 mPolymerSystemSorted->gpu,                                     \
                 mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],           \
@@ -3070,11 +3083,29 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
                 mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ), \
                 mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),       \
                 mNeighborsSortedSizes->gpu + mviSubGroupOffsets[ iSpecies ],   \
-                mnElementsInGroup[ iSpecies ], seed,                           \
+                mnElementsInGroup[ iSpecies ],                                 \
+                seed, currentAge, ( typename RNG::GlobalState * ) NULL,        \
                 mLatticeOut->texture                                           \
-            );                                                                 \
-                                                                               \
-            if ( mLog.isActive( "Stats" ) )                                    \
+            );
+            auto const periodicity = ( mIsPeriodicX << 2 ) + ( mIsPeriodicY << 1 ) + mIsPeriodicZ;
+            #define TMP_CALL_KERNEL_CHECK2( RNG ) \
+            switch ( periodicity )                \
+            {                                     \
+                case 0: TMP_CALL_KERNEL_CHECK( RNG, false, false, false ); break; \
+                case 1: TMP_CALL_KERNEL_CHECK( RNG, false, false,  true ); break; \
+                case 2: TMP_CALL_KERNEL_CHECK( RNG, false,  true, false ); break; \
+                case 3: TMP_CALL_KERNEL_CHECK( RNG, false,  true,  true ); break; \
+                case 4: TMP_CALL_KERNEL_CHECK( RNG,  true, false, false ); break; \
+                case 5: TMP_CALL_KERNEL_CHECK( RNG,  true, false,  true ); break; \
+                case 6: TMP_CALL_KERNEL_CHECK( RNG,  true,  true, false ); break; \
+                case 7: TMP_CALL_KERNEL_CHECK( RNG,  true,  true,  true ); break; \
+                default: assert( false );                                         \
+            }
+            TMP_CALL_KERNEL_CHECK2( Rngs::Hash )
+            #undef TMP_CALL_KERNEL_CHECK2
+            #undef TMP_CALL_KERNEL_CHECK
+
+            #define TMP_CALL_KERNEL_CHECK_COUNT( PX, PY, PZ )                  \
             {                                                                  \
                 kernelCountFilteredCheck< T_UCoordinateCuda, PX, PY, PZ >      \
                 <<< nBlocks, nThreads, 0, mStream >>>(                         \
@@ -3090,20 +3121,19 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
                     dpFiltered                                                 \
                 );                                                             \
             }
-            auto const periodicity = ( mIsPeriodicX << 2 ) + ( mIsPeriodicY << 1 ) + mIsPeriodicZ;
-            switch ( periodicity )
+            if ( mLog.isActive( "Stats" ) ) switch ( periodicity )
             {
-                case 0: TMP_CALL_KERNEL_CHECK( false, false, false ); break;
-                case 1: TMP_CALL_KERNEL_CHECK( false, false,  true ); break;
-                case 2: TMP_CALL_KERNEL_CHECK( false,  true, false ); break;
-                case 3: TMP_CALL_KERNEL_CHECK( false,  true,  true ); break;
-                case 4: TMP_CALL_KERNEL_CHECK(  true, false, false ); break;
-                case 5: TMP_CALL_KERNEL_CHECK(  true, false,  true ); break;
-                case 6: TMP_CALL_KERNEL_CHECK(  true,  true, false ); break;
-                case 7: TMP_CALL_KERNEL_CHECK(  true,  true,  true ); break;
+                case 0: TMP_CALL_KERNEL_CHECK_COUNT( false, false, false ); break;
+                case 1: TMP_CALL_KERNEL_CHECK_COUNT( false, false,  true ); break;
+                case 2: TMP_CALL_KERNEL_CHECK_COUNT( false,  true, false ); break;
+                case 3: TMP_CALL_KERNEL_CHECK_COUNT( false,  true,  true ); break;
+                case 4: TMP_CALL_KERNEL_CHECK_COUNT(  true, false, false ); break;
+                case 5: TMP_CALL_KERNEL_CHECK_COUNT(  true, false,  true ); break;
+                case 6: TMP_CALL_KERNEL_CHECK_COUNT(  true,  true, false ); break;
+                case 7: TMP_CALL_KERNEL_CHECK_COUNT(  true,  true,  true ); break;
                 default: assert( false );
             }
-            #undef TMP_CALL_KERNEL_CHECK
+            #undef TMP_CALL_KERNEL_CHECK_COUNT
 
             if ( useCudaMemset )
             {

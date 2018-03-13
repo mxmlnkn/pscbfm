@@ -9,6 +9,9 @@
 #endif
 
 
+namespace Rngs {
+
+
 class Saru
 {
 private:
@@ -350,3 +353,4 @@ CUDA_CALLABLE_MEMBER inline void Saru::rewindWeyl()
 }
 
 
+}

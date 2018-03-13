@@ -14,15 +14,18 @@
 #endif
 
 
+namespace Rngs {
+
+
 class PCG
 {
 public:
     class State
     {
     public:
-        uint64_t state;
         uint64_t inc;
-        inline State( void ) : state(0), inc(0) {}
+        uint64_t state;
+        inline State( void ) : inc(0), state(0) {}
         inline State( uint64_t seed, uint64_t stream )
          : inc( stream*2+1 ), state(0)
         {
@@ -32,7 +35,7 @@ public:
             //Improve quality of first random numbers
             PCG::pcg32_random( *this );
         }
-        ~State( void ){}
+        inline ~State( void ){}
     };
 
     using GlobalState = PCG::State;
@@ -43,7 +46,7 @@ private:
     {
         const uint64_t old = rng.state;
         // Advance internal state
-        rng.state = ((uint64_t) rng.state) * 0X5851F42D4C957F2DULL;
+        rng.state = ((uint64_t) rng.state) * 0x5851F42D4C957F2DULL;
         rng.state += (rng.inc | 1);
         const uint32_t xorshifted = ((old >> 18u) ^ old) >> 27u;
         const uint32_t rot = old >> 59u;
@@ -69,3 +72,6 @@ public:
 
     CUDA_CALLABLE_MEMBER inline uint32_t rng32(void){ return pcg32_random(*my_state); }
 };
+
+
+}

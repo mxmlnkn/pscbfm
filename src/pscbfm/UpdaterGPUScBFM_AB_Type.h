@@ -36,7 +36,7 @@
 #if defined( USE_BIT_PACKING_TMP_LATTICE ) && ! defined( USE_DOUBLE_BUFFERED_TMP_LATTICE )
 #   define USE_NBUFFERED_TMP_LATTICE
 #endif
-//#define USE_PERIODIC_MONOMER_SORTING
+#define USE_PERIODIC_MONOMER_SORTING
 #define USE_GPU_FOR_OVERHEAD
 //#define CHECK_FRONT_BIT_PACKED_INDEX_CALC_VERSION 0 // choose between 0 and 6, Incidentally 0 and 6 seem to be the best two
 
@@ -408,12 +408,12 @@ private:
 
     /* data needed for alternative RNGs */
     uint32_t mSeedXorwow;
-    MirroredVector< typename RNGload::GlobalState > * mRngVectorXorwow;
+    MirroredVector< typename Rngs::RNGload::GlobalState > * mRngVectorXorwow;
     curandGenerator_t mGenXorwow;
     cudaStream_t mStreamXorwow1, mStreamXorwow2;
 
     uint32_t mSeedPcg;
-    MirroredVector< PCG::State > * mStateVectorPcg;
+    MirroredVector< Rngs::PCG::State > * mStateVectorPcg;
 
 private:
     /**
