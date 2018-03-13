@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <stdint.h>
 #include <sstream>
+#include <type_traits>                      // make_unsigned
 
 #include <cuda_profiler_api.h>              // cudaProfilerStop
 #ifdef USE_THRUST_FILL
@@ -56,17 +57,11 @@ namespace {
 
 
 /* shorten full type names for kernels */
-using T_Flags            = UpdaterGPUScBFM_AB_Type::T_Flags           ;
-using T_Lattice          = UpdaterGPUScBFM_AB_Type::T_Lattice         ;
-using vecIntCUDA         = UpdaterGPUScBFM_AB_Type::T_CoordinatesCuda ;
-using T_Coordinate       = UpdaterGPUScBFM_AB_Type::T_Coordinate      ;
-using T_CoordinateCuda   = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda  ;
-using T_Coordinates      = UpdaterGPUScBFM_AB_Type::T_Coordinates     ;
-using T_CoordinateCuda   = UpdaterGPUScBFM_AB_Type::T_CoordinateCuda  ;
-using T_UCoordinateCuda  = UpdaterGPUScBFM_AB_Type::T_UCoordinateCuda ;
-using T_UCoordinatesCuda = UpdaterGPUScBFM_AB_Type::T_UCoordinatesCuda;
-using T_Id               = UpdaterGPUScBFM_AB_Type::T_Id              ;
-using vecUIntCUDA        = CudaVec4< T_UCoordinateCuda >::value_type  ;
+using T_Flags            = UpdaterGPUScBFM_AB_Type::T_Flags      ;
+using T_Lattice          = UpdaterGPUScBFM_AB_Type::T_Lattice    ;
+using T_Coordinate       = UpdaterGPUScBFM_AB_Type::T_Coordinate ;
+using T_Coordinates      = UpdaterGPUScBFM_AB_Type::T_Coordinates;
+using T_Id               = UpdaterGPUScBFM_AB_Type::T_Id         ;
 
 
 /* 512=8^3 for a range of bonds per direction of [-4,3] */
@@ -82,19 +77,29 @@ __device__ __constant__ bool dpForbiddenBonds[512]; //false-allowed; true-forbid
 __device__ __constant__ uint32_t DXTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 __device__ __constant__ uint32_t DYTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
 __device__ __constant__ uint32_t DZTable_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-__device__ __constant__ uint32_t DXTable2_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-__device__ __constant__ uint32_t DYTable2_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
-__device__ __constant__ uint32_t DZTable2_d[6]; //0:-x; 1:+x; 2:-y; 3:+y; 4:-z; 5+z
+/* stores 2*dx in order to save the multiply with 2 operation ... */
+__device__ __constant__ uint32_t DXTable2_d[6];
+__device__ __constant__ uint32_t DYTable2_d[6];
+__device__ __constant__ uint32_t DZTable2_d[6];
 /**
  * If intCUDA is different from uint32_t, then this second table prevents
  * expensive type conversions, but both tables are still needed, the
  * uint32_t version, because the calculation of the linear index will result
  * in uint32_t anyway and the intCUDA version for solely updating the
  * position information
+ * problematic to templatize ...
+ * @see https://stackoverflow.com/questions/25008402/cuda-declaring-a-device-constant-as-a-template
+ *   => seems like he does / I have to manage the constant memory myself
+ *      problem would appear if multiple kernels with differing types are
+ *      running... or rather different typed ::initialize members are called,
+ *      as then we the constant memroy data would hold the wrong value!
+ *      Working with offsets depending on the type might work, i.e. modify
+ *      the *( (int*) data ) to something like return *( (T*)( (T_LargestType*) data + sizeof(T) / sizeof( T_SmallestType ) - 1 )
+ *      this should work assuming
  */
-__device__ __constant__ T_CoordinateCuda DXTableIntCUDA_d[6];
-__device__ __constant__ T_CoordinateCuda DYTableIntCUDA_d[6];
-__device__ __constant__ T_CoordinateCuda DZTableIntCUDA_d[6];
+__device__ __constant__ UpdaterGPUScBFM_AB_Type::T_CoordinateCuda DXTableIntCUDA_d[6];
+__device__ __constant__ UpdaterGPUScBFM_AB_Type::T_CoordinateCuda DYTableIntCUDA_d[6];
+__device__ __constant__ UpdaterGPUScBFM_AB_Type::T_CoordinateCuda DZTableIntCUDA_d[6];
 
 /* will this really bring performance improvement? At least constant cache
  * might be as fast as register access when all threads in a warp access the
@@ -902,9 +907,11 @@ namespace {
  *       Why are there three kernels instead of just one
  *        -> for global synchronization
  */
+template< typename T_CoordinateCuda >
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    vecIntCUDA  const * const __restrict__ dpPolymerSystem         ,
+    typename CudaVec4< T_CoordinateCuda >::value_type
+                const * const __restrict__ dpPolymerSystem         ,
     T_Flags           * const              dpPolymerFlags          ,
     uint32_t            const              iOffset                 ,
     T_Lattice         * const __restrict__ dpLatticeTmp            ,
@@ -981,9 +988,11 @@ __global__ void kernelSimulationScBFMCheckSpecies
 }
 
 
+template< typename T_CoordinateCuda >
 __global__ void kernelCountFilteredCheck
 (
-    vecIntCUDA       const * const __restrict__ dpPolymerSystem        ,
+    typename CudaVec4< T_CoordinateCuda >::value_type
+                     const * const __restrict__ dpPolymerSystem        ,
     T_Flags          const * const              dpPolymerFlags         ,
     uint32_t                 const              iOffset                ,
     T_Lattice        const * const __restrict__ /* dpLatticeTmp */     ,
@@ -1047,13 +1056,15 @@ __global__ void kernelCountFilteredCheck
  * temporarily parallel executed moves saved in texLatticeTmp. If so,
  * do the move in dpLattice. (Still not applied in dpPolymerSystem!)
  */
+template< typename T_CoordinateCuda >
 __global__ void kernelSimulationScBFMPerformSpecies
 (
-    vecIntCUDA    const * const              dpPolymerSystem,
-    T_Flags             * const              dpPolymerFlags ,
-    T_Lattice           * const __restrict__ dpLattice      ,
-    T_Id                  const              nMonomers      ,
-    cudaTextureObject_t   const              texLatticeTmp
+    typename CudaVec4< T_CoordinateCuda >::value_type
+                        const * const              dpPolymerSystem,
+    T_Flags                   * const              dpPolymerFlags ,
+    T_Lattice                 * const __restrict__ dpLattice      ,
+    T_Id                        const              nMonomers      ,
+    cudaTextureObject_t         const              texLatticeTmp
 )
 {
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1088,9 +1099,11 @@ __global__ void kernelSimulationScBFMPerformSpecies
     }
 }
 
+template< typename T_CoordinateCuda >
 __global__ void kernelSimulationScBFMPerformSpeciesAndApply
 (
-    vecIntCUDA          * const              dpPolymerSystem,
+    typename CudaVec4< T_CoordinateCuda >::value_type
+                        * const              dpPolymerSystem,
     T_Flags             * const              dpPolymerFlags ,
     T_Lattice           * const __restrict__ dpLattice      ,
     T_Id                  const              nMonomers      ,
@@ -1115,7 +1128,7 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
             continue;
 
         dpLattice[ iOldPos ] = 0;
-        vecIntCUDA const r1 = {
+        typename CudaVec4< T_CoordinateCuda >::value_type const r1 = {
             T_CoordinateCuda( r0.x + DXTableIntCUDA_d[ direction ] ),
             T_CoordinateCuda( r0.y + DYTableIntCUDA_d[ direction ] ),
             T_CoordinateCuda( r0.z + DZTableIntCUDA_d[ direction ] ),
@@ -1127,9 +1140,11 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
     }
 }
 
+template< typename T_CoordinateCuda >
 __global__ void kernelCountFilteredPerform
 (
-    vecIntCUDA       const * const              dpPolymerSystem  ,
+    typename CudaVec4< T_CoordinateCuda >::value_type
+                     const * const              dpPolymerSystem  ,
     T_Flags          const * const              dpPolymerFlags   ,
     T_Lattice        const * const __restrict__ /* dpLattice */  ,
     T_Id                     const              nMonomers        ,
@@ -1166,12 +1181,14 @@ __global__ void kernelCountFilteredPerform
  *       many more statistics anyway for evaluating performance benefits a bit
  *       better!
  */
+template< typename T_CoordinateCuda >
 __global__ void kernelSimulationScBFMZeroArraySpecies
 (
-    vecIntCUDA          * const              dpPolymerSystem,
-    T_Flags       const * const              dpPolymerFlags ,
-    T_Lattice           * const __restrict__ dpLatticeTmp   ,
-    T_Id                  const              nMonomers
+    typename CudaVec4< T_CoordinateCuda >::value_type
+                    * const              dpPolymerSystem,
+    T_Flags   const * const              dpPolymerFlags ,
+    T_Lattice       * const __restrict__ dpLatticeTmp   ,
+    T_Id              const              nMonomers
 )
 {
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1216,14 +1233,18 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
  * Actually, as the position is just calculated as +-1 without any wrapping,
  * the only way for jumps to happen is because of type overflows.
  */
+template< typename T_CoordinateCuda >
 __global__ void kernelTreatOverflows
 (
-    T_UCoordinatesCuda * const dpPolymerSystemOld        ,
-    T_UCoordinatesCuda * const dpPolymerSystem           ,
-    T_Coordinates      * const dpiPolymerSystemVirtualBox,
-    T_Id                 const nMonomers
+    typename CudaVec4< typename std::make_unsigned< T_CoordinateCuda >::type >::value_type
+                  * const dpPolymerSystemOld        ,
+    typename CudaVec4< typename std::make_unsigned< T_CoordinateCuda >::type >::value_type
+                  * const dpPolymerSystem           ,
+    T_Coordinates * const dpiPolymerSystemVirtualBox,
+    T_Id            const nMonomers
 )
 {
+    using T_UCoordinateCuda = typename std::make_unsigned< T_CoordinateCuda >::type;
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
@@ -1638,7 +1659,6 @@ __global__ void kernelInvertMapping
  */
 __global__ void kernelApplyMappingToNeighbors
 (
-    //T_UCoordinatesCuda const * const dpPolymerSystem ,
     MonomerEdges const * const dpNeighbors            ,
     T_Id         const * const dpiNewToi              ,
     T_Id         const * const dpiToiNew              ,
@@ -1665,9 +1685,11 @@ __global__ void kernelApplyMappingToNeighbors
     }
 }
 
+template< typename T_CoordinateCuda >
 __global__ void kernelUndoPolymerSystemSorting
 (
-    T_UCoordinatesCuda const * const dpPolymerSystemSorted           ,
+    typename CudaVec4< typename std::make_unsigned< T_CoordinateCuda >::type >::value_type
+                       const * const dpPolymerSystemSorted           ,
     T_Coordinates      const * const dpiPolymerSystemSortedVirtualBox,
     T_Id               const * const dpiNewToi                       ,
     T_Coordinates            * const dpPolymerSystem                 ,
@@ -1690,15 +1712,18 @@ __global__ void kernelUndoPolymerSystemSorting
     }
 }
 
+template< typename T_CoordinateCuda >
 __global__ void kernelSplitMonomerPositions
 (
     T_Coordinates const * const dpPolymerSystem                 ,
     T_Id          const * const dpiNewToi                       ,
     T_Coordinates       * const dpiPolymerSystemSortedVirtualBox,
-    T_UCoordinatesCuda  * const dpPolymerSystemSorted           ,
+    typename CudaVec4< typename std::make_unsigned< T_CoordinateCuda >::type >::value_type
+                        * const dpPolymerSystemSorted           ,
     size_t                const nMonomersPadded
 )
 {
+    using T_UCoordinateCuda = typename std::make_unsigned< T_CoordinateCuda >::type;
     for ( auto iNew = blockIdx.x * blockDim.x + threadIdx.x;
           iNew < nMonomersPadded; iNew += gridDim.x * blockDim.x )
     {
@@ -1706,7 +1731,7 @@ __global__ void kernelSplitMonomerPositions
         if ( iOld == UINT32_MAX )
             continue;
         auto const r = dpPolymerSystem[ iOld ];
-        T_UCoordinatesCuda rlo = {
+        typename CudaVec4< T_UCoordinateCuda >::value_type rlo = {
             T_UCoordinateCuda( r.x & dcBoxXM1 ),
             T_UCoordinateCuda( r.y & dcBoxYM1 ),
             T_UCoordinateCuda( r.z & dcBoxZM1 ),
@@ -1724,8 +1749,10 @@ __global__ void kernelSplitMonomerPositions
 }
 
 
+template< typename T_CoordinateCuda >
 struct LinearizeBoxVectorIndexFunctor
 {
+    using T_UCoordinatesCuda = typename CudaVec4< typename std::make_unsigned< T_CoordinateCuda >::type >::value_type;
     __device__ inline T_Id operator()( T_UCoordinatesCuda const & r ) const
     {
         return linearizeBoxVectorIndex( r.x, r.y, r.z );
@@ -1758,7 +1785,8 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     {
         /* the padding values do not change, so we can simply let the threads
          * calculate them without worries and save the loop over the species */
-        kernelTreatOverflows<<< nBlocksP, nThreads, 0, mStream >>>(
+        kernelTreatOverflows< T_CoordinateCuda >
+        <<< nBlocksP, nThreads, 0, mStream >>>(
             mPolymerSystemSortedOld         ->gpu,
             mPolymerSystemSorted            ->gpu,
             mviPolymerSystemSortedVirtualBox->gpu,
@@ -1768,7 +1796,8 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
     #endif
 
     /* dependent on kernelTreatOverflows */
-    kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
+    kernelUndoPolymerSystemSorting< T_CoordinateCuda >
+    <<< nBlocksP, nThreads, 0, mStream >>>
     (
         mPolymerSystemSorted            ->gpu,
         mviPolymerSystemSortedVirtualBox->gpu,
@@ -1794,7 +1823,7 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
         mPolymerSystemSorted ->gpu,
         mPolymerSystemSorted ->gpu + mPolymerSystemSorted->nElements,
         mvKeysZOrderLinearIds->gpu,
-        LinearizeBoxVectorIndexFunctor()
+        LinearizeBoxVectorIndexFunctor< T_CoordinateCuda >()
     );
     /* sort per sublists (each species) by key, not the whole list */
     for ( auto iSpecies = 0u; iSpecies < mnElementsInGroup.size(); ++iSpecies )
@@ -1844,7 +1873,8 @@ void UpdaterGPUScBFM_AB_Type::doSpatialSorting( void )
      *   thrust::transform (mPolymerSystemSorted)
      *   thrust::gather (miNewToi)
      */
-    kernelSplitMonomerPositions<<< nBlocksP, nThreads, 0, mStream >>>(
+    kernelSplitMonomerPositions< T_CoordinateCuda >
+    <<< nBlocksP, nThreads, 0, mStream >>>(
         mPolymerSystem                  ->gpu,
         miNewToi                        ->gpu,
         mviPolymerSystemSortedVirtualBox->gpu,
@@ -1993,7 +2023,8 @@ void UpdaterGPUScBFM_AB_Type::initializeSortedMonomerPositions( void )
 #if defined( USE_GPU_FOR_OVERHEAD )
     auto const nThreads = 128;
     auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
-    kernelSplitMonomerPositions<<< nBlocksP, nThreads, 0, mStream >>>(
+    kernelSplitMonomerPositions< T_CoordinateCuda >
+    <<< nBlocksP, nThreads, 0, mStream >>>(
         mPolymerSystem                  ->gpu,
         miNewToi                        ->gpu,
         mviPolymerSystemSortedVirtualBox->gpu,
@@ -2564,7 +2595,8 @@ void UpdaterGPUScBFM_AB_Type::findAndRemoveOverflows( bool copyToHost )
     auto const nBlocks  = ceilDiv( mnMonomersPadded, nThreads );
     /* the padding values do not change, so we can simply let the threads
      * calculate them without worries and save the loop over the species */
-    kernelTreatOverflows<<< nBlocks, nThreads, 0, mStream >>>(
+    kernelTreatOverflows< T_CoordinateCuda >
+    <<< nBlocks, nThreads, 0, mStream >>>(
         mPolymerSystemSortedOld         ->gpu,
         mPolymerSystemSorted            ->gpu,
         mviPolymerSystemSortedVirtualBox->gpu,
@@ -2920,7 +2952,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
                 mLog( "Info" ) << "Calling Check-Kernel for species " << iSpecies << " for uint32_t * " << (void*) mNeighborsSorted->gpu << " + " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " = " << (void*)( mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) ) << " with pitch " << mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ) << "\n";
             */
 
-            kernelSimulationScBFMCheckSpecies
+            kernelSimulationScBFMCheckSpecies< T_CoordinateCuda >
             <<< nBlocks, nThreads, 0, mStream >>>(
                 reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu ),
                 mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],
@@ -2935,7 +2967,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             if ( mLog.isActive( "Stats" ) )
             {
-                kernelCountFilteredCheck
+                kernelCountFilteredCheck< T_CoordinateCuda >
                 <<< nBlocks, nThreads, 0, mStream >>>(
                     reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu ),
                     mPolymerFlags->gpu,
@@ -2952,7 +2984,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             if ( useCudaMemset )
             {
-                kernelSimulationScBFMPerformSpeciesAndApply
+                kernelSimulationScBFMPerformSpeciesAndApply< T_CoordinateCuda >
                 <<< nBlocks, nThreads, 0, mStream >>>(
                     reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + mviSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],
@@ -2963,7 +2995,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             }
             else
             {
-                kernelSimulationScBFMPerformSpecies
+                kernelSimulationScBFMPerformSpecies< T_CoordinateCuda >
                 <<< nBlocks, nThreads, 0, mStream >>>(
                     reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + mviSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],
@@ -2975,7 +3007,7 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
 
             if ( mLog.isActive( "Stats" ) )
             {
-                kernelCountFilteredPerform
+                kernelCountFilteredPerform< T_CoordinateCuda >
                 <<< nBlocks, nThreads, 0, mStream >>>(
                     reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + mviSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],
@@ -3025,9 +3057,9 @@ void UpdaterGPUScBFM_AB_Type::runSimulationOnGPU
             }
             else
             {
-                kernelSimulationScBFMZeroArraySpecies
+                kernelSimulationScBFMZeroArraySpecies< T_CoordinateCuda >
                 <<< nBlocks, nThreads, 0, mStream >>>(
-                    reinterpret_cast< T_CoordinatesCuda * >( mPolymerSystemSorted->gpu + mviSubGroupOffsets[ iSpecies ] ),
+                    reinterpret_cast< typename CudaVec4< T_CoordinateCuda >::value_type * >( mPolymerSystemSorted->gpu + mviSubGroupOffsets[ iSpecies ] ),
                     mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],
                     mLatticeTmp->gpu,
                     mnElementsInGroup[ iSpecies ]
@@ -3242,7 +3274,8 @@ void UpdaterGPUScBFM_AB_Type::doCopyBack()
 #if defined( USE_GPU_FOR_OVERHEAD )
     auto const nThreads = 128;
     auto const nBlocksP = ceilDiv( mnMonomersPadded, nThreads );
-    kernelUndoPolymerSystemSorting<<< nBlocksP, nThreads, 0, mStream >>>
+    kernelUndoPolymerSystemSorting< T_CoordinateCuda >
+    <<< nBlocksP, nThreads, 0, mStream >>>
     (
         mPolymerSystemSorted            ->gpu,
         mviPolymerSystemSortedVirtualBox->gpu,
