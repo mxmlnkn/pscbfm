@@ -1015,7 +1015,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
                 /* can I do this ??? dpPolymerSystem is the device pointer to the read-only
                  * texture used above. Won't this result in read-after-write race-conditions?
                  * Then again the written / changed bits are never used in the above code ... */
-                properties = ( direction << 2 ) + T_Flags(1) /* can-move-flag */;
+                properties = direction + T_Flags(8) /* can-move-flag */;
             #ifdef USE_BIT_PACKING_TMP_LATTICE
                 bitPackedSet( dpLatticeTmp, linearizeBoxVectorIndex( r1.x, r1.y, r1.z ) );
             #else
@@ -1117,12 +1117,12 @@ __global__ void kernelSimulationScBFMPerformSpecies
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iMonomer ];
-        if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
+        if ( ( properties & T_Flags(8) ) == T_Flags(0) ) // impossible move
             continue;
 
         auto const r0 = dpPolymerSystem[ iMonomer ];
         //uint3 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z }; // slower
-        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
+        auto const direction = properties & T_Flags(7); // 7=0b111
         uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
         if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
@@ -1132,7 +1132,7 @@ __global__ void kernelSimulationScBFMPerformSpecies
             continue;
 
         /* If possible, perform move now on normal lattice */
-        dpPolymerFlags[ iMonomer ] = properties | T_Flags(2); // indicating allowed move
+        dpPolymerFlags[ iMonomer ] = properties | T_Flags(16); // indicating allowed move
         dpLattice[ iOldPos ] = 0;
         dpLattice[ linearizeBoxVectorIndex( r0.x + DXTable_d[ direction ],
                                             r0.y + DYTable_d[ direction ],
@@ -1160,11 +1160,11 @@ __global__ void kernelSimulationScBFMPerformSpeciesAndApply
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iMonomer ];
-        if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
+        if ( ! ( properties & T_Flags(8) ) ) // check if can-move flag is set
             continue;
 
         auto const r0 = dpPolymerSystem[ iMonomer ];
-        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
+        auto const direction = properties & T_Flags(7); // 7=0b111
         uint32_t iOldPos;
     #ifdef USE_BIT_PACKING_TMP_LATTICE
         if ( checkFront( texLatticeTmp, r0.x, r0.y, r0.z, direction, &bitPackedTextureGet< T_Lattice >, &iOldPos ) )
@@ -1205,11 +1205,11 @@ __global__ void kernelCountFilteredPerform
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iMonomer ];
-        if ( ( properties & T_Flags(1) ) == T_Flags(0) )    // impossible move
+        if ( ( properties & T_Flags(8) ) == T_Flags(0) ) // impossible move
             continue;
 
         auto const data = dpPolymerSystem[ iMonomer ];
-        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
+        auto const direction = properties & T_Flags(7); // 7=0b111
         if ( checkFront( texLatticeTmp, data.x, data.y, data.z, direction ) )
             atomicAdd( dpFiltered+4, size_t(1) );
     }
@@ -1244,11 +1244,11 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x )
     {
         auto const properties = dpPolymerFlags[ iMonomer ];
-        if ( ( properties & T_Flags(3) ) == T_Flags(0) )    // impossible move
+        if ( ( properties & T_Flags(16+8) ) == T_Flags(0) ) // impossible move
             continue;
 
         auto r0 = dpPolymerSystem[ iMonomer ];
-        auto const direction = ( properties >> 2 ) & T_Flags(7); // 7=0b111
+        auto const direction = properties & T_Flags(7); // 7=0b111
 
         r0.x += DXTable_d[ direction ];
         r0.y += DYTable_d[ direction ];
@@ -1259,7 +1259,7 @@ __global__ void kernelSimulationScBFMZeroArraySpecies
     #else
         dpLatticeTmp[ linearizeBoxVectorIndex( r0.x, r0.y, r0.z ) ] = 0;
     #endif
-        if ( ( properties & T_Flags(3) ) == T_Flags(3) )  // 3=0b11
+        if ( properties & T_Flags(16))
             dpPolymerSystem[ iMonomer ] = r0;
     }
 }
