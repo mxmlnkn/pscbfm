@@ -54,11 +54,15 @@
 #   include <thrust/system/cuda/execution_policy.h>
 #   include <thrust/fill.h>
 #endif
-#include <thrust/sort.h>                    // sort_by_key
 #include <thrust/execution_policy.h>        // thrust::seq, thrust::host
+#include <thrust/system/cuda/execution_policy.h>
+#include <thrust/fill.h>
+#include <thrust/gather.h>
+#include <thrust/sequence.h>
+#include <thrust/transform.h>
+#include <thrust/sort.h>                    // sort_by_key
 
 #include "Fundamental/BitsCompileTime.hpp"
-
 #include "cudacommon.hpp"
 #include "SelectiveLogger.hpp"
 #include "graphColoring.tpp"
@@ -1795,6 +1799,7 @@ void UpdaterGPUScBFM_AB_Type::initializeSpatialSorting( void )
             miToiNew.at( miNewToi.at( iNew ) ) = iNew;
     }
 }
+#endif
 
 void UpdaterGPUScBFM_AB_Type::initializeSortedNeighbors( void )
 {
