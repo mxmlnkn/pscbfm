@@ -99,28 +99,35 @@ public:
         mActiveLevel = rLevel;
     }
 
-    bool isActive( std::string const & rLevel ) const
+    inline bool isActive( std::string const & rLevel ) const
     { return SelectiveLogger::getInstance().isActive( mActiveFile, rLevel ); }
-    bool isActive( std::string const & rFile, std::string const & rLevel ) const
+    inline bool isActive( std::string const & rFile, std::string const & rLevel ) const
     { return SelectiveLogger::getInstance().isActive( rFile, rLevel ); }
 
-    void activate  ( std::string const & rLevel ){ SelectiveLogger::getInstance().activate  ( mActiveFile, rLevel ); };
-    void deactivate( std::string const & rLevel ){ SelectiveLogger::getInstance().deactivate( mActiveFile, rLevel ); };
+    inline void activate  ( std::string const & rLevel ){ SelectiveLogger::getInstance().activate  ( mActiveFile, rLevel ); };
+    inline void deactivate( std::string const & rLevel ){ SelectiveLogger::getInstance().deactivate( mActiveFile, rLevel ); };
 
-    bool isActive ( void ) const { return SelectiveLogger::getInstance().isActive( mActiveFile, mActiveLevel ); };
-    void activate  ( void ){ SelectiveLogger::getInstance().activate  ( mActiveFile, mActiveLevel ); };
-    void deactivate( void ){ SelectiveLogger::getInstance().deactivate( mActiveFile, mActiveLevel ); };
+    inline bool isActive ( void ) const { return SelectiveLogger::getInstance().isActive( mActiveFile, mActiveLevel ); };
+    inline void activate  ( void ){ SelectiveLogger::getInstance().activate  ( mActiveFile, mActiveLevel ); };
+    inline void deactivate( void ){ SelectiveLogger::getInstance().deactivate( mActiveFile, mActiveLevel ); };
 
-    SelectedLogger & file ( std::string const & s ){ mActiveFile  = s; return *this; };
-    SelectedLogger & level( std::string const & s ){ mActiveLevel = s; return *this; };
+    inline SelectedLogger & file ( std::string const & s ){ mActiveFile  = s; return *this; };
+    inline SelectedLogger & level( std::string const & s ){ mActiveLevel = s; return *this; };
     /* @todo maybe return a copy and only write out in destructor, like geniously done here?:
      * https://stackoverflow.com/questions/6168107/how-to-implement-a-good-debug-logging-feature-in-a-project */
-    SelectedLogger & operator()( std::string const & f, std::string const & l ){  return file(f).level(l); }
-    SelectedLogger & operator()( std::string const & l ){  return file( mActiveFile ).level(l); }
+    inline SelectedLogger & operator()( std::string const & f, std::string const & l ){  return file(f).level(l); }
+    inline SelectedLogger & operator()( std::string const & l ){  return file( mActiveFile ).level(l); }
 
     /* Note that this does not work with std::endl @todo make it work by deriving from ostream? */
+    /* Note !!! also regarding basically all other const & arguments ...
+     * If used with a static constexpr member, this unwantedly leads to a
+     * definition error, because even if it is inline ( const & ), an
+     * address has to be taken, meaning the constexpr member needs to be
+     * defined normally inside the body... which is normally not done nor
+     * wanted! Note that things like std::string can't be declared as constexpr anyway,
+     * so it does not have that problem */
     template< class T >
-    SelectedLogger & operator<< ( T const & x )
+    inline SelectedLogger & operator<< ( T const x )
     {
         /* Currently this only uses the global level settings from
          * SelectiveLogger. In future this should use SelectiveLogger::writeln,
