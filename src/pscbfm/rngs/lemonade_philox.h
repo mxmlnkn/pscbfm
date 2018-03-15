@@ -15,7 +15,8 @@
 namespace Rngs {
 
 
-class lemonade_philox{
+class lemonade_philox
+{
 private:
     uint64_t mSeed;
     uint64_t mIteration;
@@ -31,7 +32,7 @@ public:
 
 
     CUDA_CALLABLE_MEMBER inline  lemonade_philox( void ) : initialized( false ){}
-    CUDA_CALLABLE_MEMBER inline ~lemonade_philox( void );
+    CUDA_CALLABLE_MEMBER inline ~lemonade_philox( void ){};
 
     CUDA_CALLABLE_MEMBER static constexpr bool needsSeed       ( void ){ return true ; }
     CUDA_CALLABLE_MEMBER static constexpr bool needsSubsequence( void ){ return true ; }

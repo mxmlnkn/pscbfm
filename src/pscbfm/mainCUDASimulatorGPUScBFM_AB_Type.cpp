@@ -35,6 +35,13 @@ void printHelp( void )
         << "        (required) specify a BFM file to load the configuration to simulate from\n"
         << "    -m, --max-mcs <integer>\n"
         << "        (required) specifies the total Monte-Carlo steps to simulate.\n"
+        << "    -r, --rng <integer>\n"
+        << "        The random number generator to use: "
+            << (int) UpdaterGPUScBFM_AB_Type< uint8_t >::Rng::IntHash << ": IntHash, "
+            << (int) UpdaterGPUScBFM_AB_Type< uint8_t >::Rng::Saru    << ": Saru, "
+            << (int) UpdaterGPUScBFM_AB_Type< uint8_t >::Rng::Philox  << ": Philox , "
+            << (int) UpdaterGPUScBFM_AB_Type< uint8_t >::Rng::Pcg     << ": Pcg, "
+            << (int) UpdaterGPUScBFM_AB_Type< uint8_t >::Rng::Xorwow  << ": Xorwow\n"
         << "    -s, --save-interval <integer>\n"
         << "        save after every <integer> Monte-Carlo steps to the output file.\n"
         << "    -o, --output <file path>\n"
@@ -56,6 +63,7 @@ int main( int argc, char ** argv )
     uint32_t max_mcs         = 0; /* how many Monte-Carlo steps to simulate */
     uint32_t save_interval   = 0;
     int      iGpuToUse       = 0;
+    int      iRngToUse       = -1;
     std::string seedFileName = "";
 
     try
@@ -77,13 +85,14 @@ int main( int argc, char ** argv )
                 { "initial-state", required_argument, 0, 'i' },
                 { "max-mcs"      , required_argument, 0, 'm' },
                 { "output"       , required_argument, 0, 'o' },
+                { "rng"          , required_argument, 0, 'r' },
                 { "save-interval", required_argument, 0, 's' },
                 { "version"      , no_argument      , 0, 'v' },
                 { 0, 0, 0, 0 }    // signal end of list
             };
             /* getopt_long stores the option index here. */
             int option_index = 0;
-            int c = getopt_long( argc, argv, "e:g:hi:m:o:s:v", long_options, &option_index );
+            int c = getopt_long( argc, argv, "e:g:hi:m:o:r:s:v", long_options, &option_index );
 
             if ( c == -1 )
                 break;
@@ -108,6 +117,9 @@ int main( int argc, char ** argv )
                 case 'o':
                     outfile = std::string( optarg );
                     break;
+                case 'r':
+                    iRngToUse = std::atoi( optarg );
+                    break;
                 case 's':
                     save_interval = std::atol( optarg );
                     break;
@@ -123,28 +135,19 @@ int main( int argc, char ** argv )
             }
         }
 
-        std::cerr
-        << "infile          = " << infile        << "\n"
-        << "outfile         = " << outfile       << "\n"
-        << "max_mcs         = " << max_mcs       << "\n"
-        << "save_interval   = " << save_interval << "\n";
-
-        //seed the globally available random number generators
+        /* seed the globally available random number generators */
         RandomNumberGenerators rng;
         if ( ! seedFileName.empty() )
-        {
-            std::cerr << "Use seeds from: " << seedFileName << "\n";
             rng.seedAll( seedFileName );
-        }
         else
             rng.seedAll();
 
         /* Check the initial values. Note that the drawing of these random
          * values can't be omitted, or else all subsequent random numbers
          * will shift / change! */
-        std::cerr << "std rand: " << std::setw(12) << std::rand()       << " =?= 764080779"  << "\n";
-        std::cerr << "RNG rand: " << std::setw(12) << rng.r250_rand32() << " =?= 4223731124" << "\n";
-        std::cerr << "RNG rand: " << std::setw(12) << rng.r250_drand()  << " =?= 0.803876"   << "\n";
+        std::rand      ();
+        rng.r250_rand32();
+        rng.r250_drand ();
 
         /*
         FeatureExcludedVolume<> is equivalent to FeatureExcludedVolume< FeatureLattice< bool > >
@@ -159,11 +162,24 @@ int main( int argc, char ** argv )
         typedef Ingredients< Config > Ing;
         Ing myIngredients;
 
+        /**
+         * note that TaskManager stores the pointer to the updater inside
+         * a UpdaterObject class and the destructor of that class
+         * calls the destructor of the updater, i.e., it would unfortunately
+         * be wrong to manually call the destructor or even to allocate
+         * it on the heap, i.e.:
+         *   GPUScBFM_AB_Type<Ing> gpuBfm( myIngredients, save_interval, iGpuToUse );
+         */
+        auto const pUpdaterGpu = new GPUScBFM_AB_Type<Ing>( myIngredients, save_interval );
+        pUpdaterGpu->setGpu( iGpuToUse );
+        if ( iRngToUse != -1 )
+            pUpdaterGpu->setRng( iRngToUse );
+
         TaskManager taskmanager;
         taskmanager.addUpdater( new UpdaterReadBfmFile<Ing>( infile, myIngredients,UpdaterReadBfmFile<Ing>::READ_LAST_CONFIG_SAVE ), 0 );
         //here you can choose to use MoveLocalBcc instead. Careful though: no real tests made yet
         //(other than for latticeOccupation, valid bonds, frozen monomers...)
-        taskmanager.addUpdater( new GPUScBFM_AB_Type<Ing>( myIngredients, save_interval, iGpuToUse ) );
+        taskmanager.addUpdater( pUpdaterGpu );
 
         taskmanager.addAnalyzer( new AnalyzerWriteBfmFile<Ing>( outfile, myIngredients ) );
 

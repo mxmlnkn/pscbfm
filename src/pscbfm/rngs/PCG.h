@@ -65,10 +65,10 @@ public:
     CUDA_CALLABLE_MEMBER static constexpr bool needsIteration  ( void ){ return false; }
     CUDA_CALLABLE_MEMBER static constexpr bool needsGlobalState( void ){ return true ; }
 
-    CUDA_CALLABLE_MEMBER inline void set_global_state( PCG::GlobalState * ptr ){ my_state = ptr; }
-    CUDA_CALLABLE_MEMBER inline void set_iteration  ( uint64_t const ){}
-    CUDA_CALLABLE_MEMBER inline void set_seed       ( uint64_t const ){}
-    CUDA_CALLABLE_MEMBER inline void set_subsequence( uint64_t const ){}
+    CUDA_CALLABLE_MEMBER inline void setGlobalState( PCG::GlobalState * ptr ){ my_state = ptr; }
+    CUDA_CALLABLE_MEMBER inline void setIteration  ( uint64_t const ){}
+    CUDA_CALLABLE_MEMBER inline void setSeed       ( uint64_t const ){}
+    CUDA_CALLABLE_MEMBER inline void setSubsequence( uint64_t const ){}
 
     CUDA_CALLABLE_MEMBER inline uint32_t rng32(void){ return pcg32_random(*my_state); }
 };

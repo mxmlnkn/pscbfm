@@ -1404,6 +1404,7 @@ UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::UpdaterGPUScBFM_AB_Type()
    mBoxZM1                          ( 0    ),
    mBoxXLog2                        ( 0    ),
    mBoxXYLog2                       ( 0    ),
+   miRngToUse                       ( Rng::IntHash ),
    mRngVectorXorwow                 ( NULL ),
    mStateVectorPcg                  ( NULL )
 {
@@ -2456,11 +2457,13 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initialize( void )
         << " - maximum connectivity is " << MAX_CONNECTIVITY << "\n"
     #endif
     #if defined( NONPERIODICITY )
-        << " - hardcoded non-periodic boundary conditions"
+        << " - hardcoded non-periodic boundary conditions\n"
     #else
-        << " - hardcoded periodic boundary conditions"
+        << " - hardcoded periodic boundary conditions\n"
     #endif
     ;
+
+    mLog( "Info" ) << "use randomg number generator " << (int) miRngToUse << "\n";
 
     auto constexpr maxBoxSize = ( 1llu << ( CHAR_BIT * sizeof( T_CoordinateCuda ) ) );
     if ( mBoxX > maxBoxSize || mBoxY > maxBoxSize || mBoxZ > maxBoxSize )
@@ -2509,23 +2512,25 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initialize( void )
         doSpatialSorting();
 
     /* initializeRandomNumbers */
-    /* xorwow */
-    mSeedXorwow = 781241814;
-    //mSeedXorwow      = randomNumbers.r250_rand32();
-    mRngVectorXorwow = new MirroredVector< Rngs::RNGload::GlobalState >( mnAllMonomers );
-    CURAND_CALL( curandCreateGenerator( & mGenXorwow, CURAND_RNG_PSEUDO_DEFAULT ) );
-    cudaStreamCreate( &mStreamXorwow1 );
-    cudaStreamCreate( &mStreamXorwow2 );
-    CURAND_CALL( curandSetStream ( mGenXorwow, mStreamXorwow1 ) );
-    CURAND_CALL( curandSetPseudoRandomGeneratorSeed( mGenXorwow, mSeedXorwow ) );
-    CURAND_CALL( curandGenerate( mGenXorwow, mRngVectorXorwow->gpu, mnAllMonomers ) ); //Generate a first set of RNGs
-    /* pcg */
-    mSeedPcg = 781241814;
-    //mSeedPcg = randomNumbers.r250_rand32();
-    mStateVectorPcg = new MirroredVector< Rngs::PCG::State >( mnAllMonomers );
-    for ( unsigned int i = 0; i < mnAllMonomers; ++i )
-            mStateVectorPcg->host[i] = Rngs::PCG::State( mSeedPcg, i );
-    mStateVectorPcg->push();
+    if ( miRngToUse == Rng::Xorwow )
+    {
+        mSeedXorwow      = randomNumbers.r250_rand32();
+        mRngVectorXorwow = new MirroredVector< Rngs::RNGload::GlobalState >( mnAllMonomers );
+        CURAND_CALL( curandCreateGenerator( & mGenXorwow, CURAND_RNG_PSEUDO_DEFAULT ) );
+        cudaStreamCreate( &mStreamXorwow );
+        CURAND_CALL( curandSetStream ( mGenXorwow, mStreamXorwow ) );
+        CURAND_CALL( curandSetPseudoRandomGeneratorSeed( mGenXorwow, mSeedXorwow ) );
+        CURAND_CALL( curandGenerate( mGenXorwow, mRngVectorXorwow->gpu, mnAllMonomers ) ); //Generate a first set of RNGs
+    }
+    else if ( miRngToUse == Rng::Pcg )
+    {
+        mSeedPcg = randomNumbers.r250_rand32();
+        mStateVectorPcg = new MirroredVector< Rngs::PCG::State >( mnAllMonomers );
+        for ( unsigned int i = 0; i < mnAllMonomers; ++i )
+                mStateVectorPcg->host[i] = Rngs::PCG::State( mSeedPcg, i );
+        mStateVectorPcg->push();
+    }
+    /* Saru, IntHash and Philox don't need any particular initialization */
 
     CUDA_ERROR( cudaGetDevice( &miGpuToUse ) );
     CUDA_ERROR( cudaGetDeviceProperties( &mCudaProps, miGpuToUse ) );
@@ -3073,7 +3078,11 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
                 mLog( "Info" ) << "Calling Check-Kernel for species " << iSpecies << " for uint32_t * " << (void*) mNeighborsSorted->gpu << " + " << mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) << " = " << (void*)( mNeighborsSorted->gpu + mNeighborsSortedInfo.getMatrixOffsetElements( iSpecies ) ) << " with pitch " << mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ) << "\n";
             */
 
-            #define TMP_CALL_KERNEL_CHECK( RNG, PX, PY, PZ )                   \
+            /* Wait for RNGs to be generated */
+            if ( miRngToUse == Rng::Xorwow )
+                cudaStreamSynchronize( mStreamXorwow );
+
+            #define TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE, PX, PY, PZ ) \
             kernelSimulationScBFMCheckSpecies< T_UCoordinateCuda, RNG, PX, PY, PZ > \
             <<< nBlocks, nThreads, 0, mStream >>>(                             \
                 mPolymerSystemSorted->gpu,                                     \
@@ -3084,24 +3093,32 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
                 mNeighborsSortedInfo.getMatrixPitchElements( iSpecies ),       \
                 mNeighborsSortedSizes->gpu + mviSubGroupOffsets[ iSpecies ],   \
                 mnElementsInGroup[ iSpecies ],                                 \
-                seed, currentAge, ( typename RNG::GlobalState * ) NULL,        \
+                SEED, SUBSEQ, STATE,                                           \
                 mLatticeOut->texture                                           \
             );
             auto const periodicity = ( mIsPeriodicX << 2 ) + ( mIsPeriodicY << 1 ) + mIsPeriodicZ;
-            #define TMP_CALL_KERNEL_CHECK2( RNG ) \
+            #define TMP_CALL_KERNEL_CHECK2( RNG, SEED, SUBSEQ, STATE ) \
             switch ( periodicity )                \
             {                                     \
-                case 0: TMP_CALL_KERNEL_CHECK( RNG, false, false, false ); break; \
-                case 1: TMP_CALL_KERNEL_CHECK( RNG, false, false,  true ); break; \
-                case 2: TMP_CALL_KERNEL_CHECK( RNG, false,  true, false ); break; \
-                case 3: TMP_CALL_KERNEL_CHECK( RNG, false,  true,  true ); break; \
-                case 4: TMP_CALL_KERNEL_CHECK( RNG,  true, false, false ); break; \
-                case 5: TMP_CALL_KERNEL_CHECK( RNG,  true, false,  true ); break; \
-                case 6: TMP_CALL_KERNEL_CHECK( RNG,  true,  true, false ); break; \
-                case 7: TMP_CALL_KERNEL_CHECK( RNG,  true,  true,  true ); break; \
-                default: assert( false );                                         \
+                case 0: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE, false, false, false ); break; \
+                case 1: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE, false, false,  true ); break; \
+                case 2: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE, false,  true, false ); break; \
+                case 3: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE, false,  true,  true ); break; \
+                case 4: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE,  true, false, false ); break; \
+                case 5: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE,  true, false,  true ); break; \
+                case 6: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE,  true,  true, false ); break; \
+                case 7: TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE,  true,  true,  true ); break; \
+                default: std::cerr << "Can't match periodicity " << periodicity << "!\n"; assert( false ); \
             }
-            TMP_CALL_KERNEL_CHECK2( Rngs::Hash )
+            switch ( miRngToUse )
+            {
+                case Rng::IntHash: TMP_CALL_KERNEL_CHECK2( Rngs::Hash           , seed, currentAge, NULL ); break;
+                case Rng::Saru   : TMP_CALL_KERNEL_CHECK2( Rngs::Saru           , seed, currentAge, NULL ); break;
+                case Rng::Philox : TMP_CALL_KERNEL_CHECK2( Rngs::lemonade_philox, seed, currentAge, NULL ); break;
+                case Rng::Pcg    : TMP_CALL_KERNEL_CHECK2( Rngs::PCG, mSeedPcg, currentAge, mStateVectorPcg->gpu ); break;
+                case Rng::Xorwow : TMP_CALL_KERNEL_CHECK2( Rngs::RNGload, mSeedXorwow, currentAge, mRngVectorXorwow->gpu ); break;
+                default: std::cerr <<"Unsupported RNG " << (int) miRngToUse << "!\n"; assert( false );
+            }
             #undef TMP_CALL_KERNEL_CHECK2
             #undef TMP_CALL_KERNEL_CHECK
 
@@ -3134,6 +3151,14 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
                 default: assert( false );
             }
             #undef TMP_CALL_KERNEL_CHECK_COUNT
+
+            if ( miRngToUse == Rng::Xorwow )
+            {
+                /* Wait for the first kernel to finish, before overwriting the RNGs
+                 * Optimize: two arrays and a pointer swap */
+                cudaStreamSynchronize( mStream );
+                CURAND_CALL( curandGenerate( mGenXorwow, mRngVectorXorwow->gpu, mnAllMonomers ) );
+            }
 
             if ( useCudaMemset )
             {
@@ -3470,8 +3495,7 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::cleanup()
 {
     this->destruct();
 
-    cudaStreamDestroy( mStreamXorwow1 );
-    cudaStreamDestroy( mStreamXorwow2 );
+    cudaStreamDestroy( mStreamXorwow );
     cudaDeviceSynchronize();
     cudaProfilerStop();
 }

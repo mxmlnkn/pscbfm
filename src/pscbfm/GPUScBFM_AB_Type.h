@@ -56,6 +56,7 @@ private:
     WrappedTemplatedUpdaters mUpdatersGpu;
 
     int miGpuToUse;
+    int miRngToUse;
     //! Number of Monte-Carlo Steps (mcs) to be executed (per GPU-call / Updater call)
     uint32_t mnSteps;
     SelectedLogger mLog;
@@ -81,6 +82,7 @@ public:
     : mIngredients( rIngredients                   ),
       molecules   ( rIngredients.modifyMolecules() ),
       miGpuToUse  ( riGpuToUse                     ),
+      miRngToUse  ( -1                             ),
       mnSteps     ( rnSteps                        ),
       mLog        ( __FILENAME__                   )
     {
@@ -91,6 +93,11 @@ public:
         mLog.  activate( "Stat"      );
         mLog.deactivate( "Warning"   );
     }
+
+    inline void setGpu( int riGpuToUse ){ miGpuToUse = riGpuToUse; }
+    template< typename T >
+    inline void setRng( UpdaterGPUScBFM_AB_Type<T> riRngToUse ){ miRngToUse = riRngToUse; }
+    inline void setRng( int riRngToUse ){ miRngToUse = riRngToUse; }
 
     /**
      * Copies required data and parameters from mIngredients to mUpdaterGpu
@@ -111,6 +118,8 @@ public:
 
         mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] Forwarding relevant paramters to GPU updater\n";
         mUpdaterGpu.setGpu( miGpuToUse );
+        if ( miRngToUse != -1 )
+            mUpdaterGpu.setRng( ( typename UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::Rng )( miRngToUse ) );
         mLog( "Info" ) << "[" << __FILENAME__ << "::initialize] mUpdaterGpu.setPeriodicity\n";
         /* Forward needed parameters to the GPU updater */
         mUpdaterGpu.setAge( mIngredients.modifyMolecules().getAge() );
