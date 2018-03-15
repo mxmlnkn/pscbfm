@@ -267,8 +267,8 @@ checkSc()
 
     if [ "$profile" -eq 0 ]; then return 0; fi
 
-    nvprof="$csrun nvprof --kernels ':::30[01][0-9]'"
-    $nvprof --csv --normalized-time-unit s --log-file "$logName-trace.csv" \
+    nvprof="$csrun nvprof --kernels :::30[01][0-9]"
+    nvprof --csv --normalized-time-unit s --log-file "$logName-trace.csv" \
       --system-profiling on --print-gpu-trace --print-api-trace \
       $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-trace.log"
     # Metrics
@@ -279,8 +279,9 @@ checkSc()
       --metrics all --events all --print-gpu-trace \
       $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-metrics.log"
     # For nvvp
-    $nvprof --system-profiling on -o "$logName-timeline.prof" \
+    nvprof --system-profiling on -o "$logName-timeline.prof" \
       $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-timeline.log"
     $nvprof --analysis-metrics -o "$logName-metrics.prof" \
       $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-metrics.log"
+    # rm "$folder"/{*{-metrics,-trace,-timeline}.log,*.prof,*.csv}
 )
