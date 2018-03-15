@@ -53,7 +53,8 @@ elseif( CMAKE_BUILD_TYPE STREQUAL "Debug" )
 endif()
 
 if ( NOT EXISTS "${PROJECT_SOURCE_DIR}/extern/Fundamental/Fundamental.hpp" )
-    execute_process( COMMAND git submodule update --recursive )
+    execute_process( COMMAND git submodule update --init --recursive
+                     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR} )
 endif()
 
 # find LeMonADE headers and compiled library
@@ -103,7 +104,7 @@ if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
             # header only it will simply result in only the compiled
             # library being 'installed'
             COMMAND sh -c "\
-            git submodule update --init -- ${LEMONADE_SUBMODULE_FOLDER}     && \
+             -- ${LEMONADE_SUBMODULE_FOLDER}     && \
             cd ${LEMONADE_SUBMODULE_FOLDER}                                 && \
             mkdir -p build install                                          && \
             cd build                                                        && \
