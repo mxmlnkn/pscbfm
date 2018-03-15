@@ -171,6 +171,7 @@ message( "Compile for sm_${CUDA_ARCH}" )
 set( MINIMAL_CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS}
     -std=c++11 -Xcompiler -fPIC,-Wno-unused-parameter
     -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH}
+    ${NVCC_EXPERIMENTAL_FLAG}-relaxed-constexpr
 )
 set( BENCHMARK_CUDA_NVCC_FLAGS
     # Show resource usage such as registers and memory of the GPU code. => will be in make log in benchmarking logs, although I guess this might be a reason to force recompilation before benchmarking
@@ -242,7 +243,7 @@ message( " CMAKE_CXX_FLAGS_DEBUG   = ${CMAKE_CXX_FLAGS_DEBUG}" )
 set( BIN_NAME "pscbfm" )
 set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
 file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
-set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER} --compiler-options -Wall,-Wextra ${NVCC_EXPERIMENTAL_FLAG}-relaxed-constexpr" )
+set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER} --compiler-options -Wall,-Wextra" )
 cuda_add_executable( ${BIN_NAME}
     src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
     src/pscbfm/mainCUDASimulatorGPUScBFM_AB_Type.cpp
@@ -302,6 +303,6 @@ if( BUILD_BENCHMARKS )
             "benchmarks/${subdir}/UpdaterGPUScBFM_AB_Type.cu"
             "benchmarks/${subdir}/mainCUDASimulatorGPUScBFM_AB_Type.cpp"
         )
-        target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} cuda )
+        target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} ${CUDA_curand_LIBRARY} cuda )
     endforeach()
 endif()

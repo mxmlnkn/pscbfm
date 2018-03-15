@@ -130,6 +130,7 @@ checkSc()
     local arch=30
     local forceCompile=
     local nBenchmarks=10
+    local skipVerification=0
 
     while [ $# -gt 0 ]; do case "$1" in
         --arch) shift; arch=$1; ;;
@@ -139,6 +140,7 @@ checkSc()
         -p|--profile) profile=1; benchmark=1; ;;
         -c|--check) check='cuda-memcheck --leak-check full'; ;;
         -g|--gpu) shift; iGpu=$1; ;;
+        -n|--no-verify) skipVerification=1; ;;
         --folder) shift; folder=$1; ;;
         --batchjob-prefix)
             shift
@@ -182,9 +184,9 @@ checkSc()
         # extract SASS code
         cuobjdump --dump-sass "./gpu-sources/${name#benchmark-}/UpdaterGPUScBFM_AB_Type.fatbin" > "./gpu-sources/${name#benchmark-}/UpdaterGPUScBFM_AB_Type.sass"
         mkdir -p "$folder/gpu-source/"
-        'mv' "./gpu-sources/${name#benchmark-}" "$folder/gpu-source/"
+        'mv' "./gpu-sources/${name#benchmark-}" "$folder/gpu-sources/"
         # make new empty folder, because else next build might fail
-        mkdir "./gpu-sources/${name#benchmark-}"
+        mkdir -p "./gpu-sources/${name#benchmark-}"
     } 2>&1 | tee "$logName-build.log"
     if [ ! "${PIPESTATUS[0]}" -eq 0 ]; then return 1; fi
 
@@ -199,7 +201,7 @@ checkSc()
         else
             while read line; do
                 if [ "${line#* }" == 'false' ]; then iGpu=${line% *}; break; fi
-            done < <( ./gpuinfo | sed -n -r '
+            done < <( $csrun ./gpuinfo | sed -n -r '
                 s|.*Device Number ([0-9]+).*|\1|p;
                 s|.*Kernel Timeout Enabled[ \t]*: ([a-z]+)$|\1|p;' |
                 paste -d' ' - - )
@@ -210,45 +212,47 @@ checkSc()
         fi
     fi
 
-    'rm' result.bfm
-    # https://savannah.gnu.org/support/?109403
-    #time \#
-    $csrun $check "./$name" -i ../tests/inputPscBFM.bfm -e ../tests/resultNormPscBFM.seeds \
-        -o result.bfm -g $iGpu -m 1000 -s 1000 2>&1 | tee "$logName-check.log"
-    # cp result{,-norm}.bfm
+    if [ "$skipVerification" -eq 0 ]; then
+        'rm' result.bfm
+        # https://savannah.gnu.org/support/?109403
+        #time \#
+        $csrun $check "./$name" -i ../tests/inputPscBFM.bfm -e ../tests/resultNormPscBFM.seeds \
+            -o result.bfm -g $iGpu -m 1000 -s 1000 2>&1 | tee "$logName-check.log"
+        # cp result{,-norm}.bfm
 
-    diff -q <( cat '../tests/resultNormPscBFM.bfm' | ignoreBFMLines ) \
-            <( cat 'result.bfm'                    | ignoreBFMLines )
-    local identical=$?
-    if [ ! "$identical" -eq 0 ]; then
-        if [ -f result.bfm ]; then
-            colordiff --report-identical-files \
-                <( cat '../tests/resultNormPscBFM.bfm' | ignoreBFMLines | hexdump -C ) \
-                <( cat 'result.bfm'                    | ignoreBFMLines | hexdump -C ) | head -20
-        else
-            echo "File 'result.bfm' does not exist. It seems the simulation did not even finish and quit because of some problem."
-        fi 2>&1 | tee -a "$logName-check.log"
+        diff -q <( cat '../tests/resultNormPscBFM.bfm' | ignoreBFMLines ) \
+                <( cat 'result.bfm'                    | ignoreBFMLines )
+        local identical=$?
+        if [ ! "$identical" -eq 0 ]; then
+            if [ -f result.bfm ]; then
+                colordiff --report-identical-files \
+                    <( cat '../tests/resultNormPscBFM.bfm' | ignoreBFMLines | hexdump -C ) \
+                    <( cat 'result.bfm'                    | ignoreBFMLines | hexdump -C ) | head -20
+            else
+                echo "File 'result.bfm' does not exist. It seems the simulation did not even finish and quit because of some problem."
+            fi 2>&1 | tee -a "$logName-check.log"
 
-        echo -e "\e[31mFiles are not identical, something is wrong, not bothering with benchmarks\e[0m" 1>&2
-        return 1
+            echo -e "\e[31mFiles are not identical, something is wrong\e[0m" 1>&2
+            #return 1
+        fi
+
+        # print relevant timings for a quick overview, not the real benchmark
+        echo "== checkSc $name =="
+        'sed' -nr '/^t[A-Z].* = [0-9.]*s$/p' -- "$logName-check.log"
     fi
-
-    # print relevant timings for a quick overview, not the real benchmark
-    echo "== checkSc $name =="
-    'sed' -nr '/^t[A-Z].* = [0-9.]*s$/p' -- "$logName-check.log"
 
     if [ "$benchmark" -eq 0 ]; then return 0; fi
 
     program="./$name -i ../tests/inputPscBFM.bfm -e ../tests/resultNormPscBFM.seeds -o result.bfm -g $iGpu"
-    nLoopsFast=10000
-    nLoopsSlow=100
+    nLoopsFast=5000 # better a factor of 5k, because that's how often the newer benchmarks resort the particles
+    nRunOnGPU=5 # might be better to choose a prime ...
     # Get timings for kernels
     # nvprof run like this doesn't seem to add any measurable overhead => Call this in a loop to get statistics for tGpuLoop, tTaskLoop, ... instead of one-time values
     for (( i = 0; i < nBenchmarks; ++i )); do
-        $csrun $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee -a "$logName-timers.log" & pid=$!
+        $csrun $program -m $(( nRunOnGPU * nLoopsFast )) -s $nLoopsFast 2>&1 | tee -a "$logName-timers.log" & pid=$!
         echo '' > "$logName-timers-run-$i-throttling.log"
         while [ -n "$( ps -o pid= -p $pid )" ]; do
-            nvidia-smi -i 0 -q >> "$logName-timers-run-$i-throttling.log"
+            $csrun nvidia-smi -i 0 -q >> "$logName-timers-run-$i-throttling.log"
             sleep 0.2s
         done
     done
@@ -258,21 +262,25 @@ checkSc()
     #$csrun nvprof --analysis-metrics --output-profile "$logName-profiling.prof" $program -m 10 -s 10 2>&1 | tee "$logName-profiling.log"
     # note that this takes a looooong time: adding time command: 19.6s, vs. without: 2.3s and this is basically just the overhead with 100 steps it takes 2.6s and with 1000 6.2s => a+10*b=2.3, a+100*b=2.6 => 90*b=0.3s => 10 cycles should only take 0.0333s, but with nvprof take 19.6-2.3=17.3s which would mean that nvprof --anylsis-metrics incurs a 519x slowdown ...
     # Timelines
-    nvprof --csv --normalized-time-unit s --log-file "$logName-summary.csv" --system-profiling on --print-summary \
-      $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-summary.log"
+    $csrun nvprof --csv --normalized-time-unit s --log-file "$logName-summary.csv" --system-profiling on --print-summary \
+      $program -m $(( nRunOnGPU * nLoopsFast )) -s $nLoopsFast 2>&1 | tee "$logName-summary.log"
 
     if [ "$profile" -eq 0 ]; then return 0; fi
 
-    nvprof --csv --normalized-time-unit s --log-file "$logName-trace.csv" --system-profiling on --print-gpu-trace --print-api-trace \
+    nvprof="$csrun nvprof --kernels ':::30[01][0-9]'"
+    $nvprof --csv --normalized-time-unit s --log-file "$logName-trace.csv" \
+      --system-profiling on --print-gpu-trace --print-api-trace \
       $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-trace.log"
     # Metrics
-    nvprof --csv --normalized-time-unit s --log-file "$logName-summary-metrics.csv" --kernels ':::1[01][0-9]' --metrics all --events all \
-      $program -m $nLoopsSlow -s $nLoopsSlow 2>&1 | tee "$logName-summary-metrics.log"
-    nvprof --csv --normalized-time-unit s --log-file "$logName-metrics.csv" --kernels ':::1[01][0-9]' --metrics all --events all --print-gpu-trace \
-      $program -m $nLoopsSlow -s $nLoopsSlow 2>&1 | tee "$logName-metrics.log"
+    $nvprof --csv --normalized-time-unit s --log-file "$logName-summary-metrics.csv" \
+      --metrics all --events all \
+      $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-summary-metrics.log"
+    $nvprof --csv --normalized-time-unit s --log-file "$logName-metrics.csv" \
+      --metrics all --events all --print-gpu-trace \
+      $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-metrics.log"
     # For nvvp
-    nvprof --system-profiling on -o "$logName-timeline.prof" \
+    $nvprof --system-profiling on -o "$logName-timeline.prof" \
       $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-timeline.log"
-    nvprof --kernels ':::1[01][0-9]' --analysis-metrics -o "$logName-metrics.prof" \
-      $program -m 100 -s 100 2>&1 | tee "$logName-metrics.log"
+    $nvprof --analysis-metrics -o "$logName-metrics.prof" \
+      $program -m $nLoopsFast -s $nLoopsFast 2>&1 | tee "$logName-metrics.log"
 )
