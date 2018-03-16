@@ -104,7 +104,7 @@ if( ( NOT LEMONADE_INCLUDE_DIR ) OR ( NOT LEMONADE_LIBRARY_DIR ) )
             # header only it will simply result in only the compiled
             # library being 'installed'
             COMMAND sh -c "\
-             -- ${LEMONADE_SUBMODULE_FOLDER}     && \
+            git submodule update --init -- ${LEMONADE_SUBMODULE_FOLDER}     && \
             cd ${LEMONADE_SUBMODULE_FOLDER}                                 && \
             mkdir -p build install                                          && \
             cd build                                                        && \
