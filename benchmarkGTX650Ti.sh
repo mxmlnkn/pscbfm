@@ -109,32 +109,3 @@ for benchmark in "${quickBenchmarks[@]}"; do
            "$folder/${benchmark}-UpdaterGPUScBFM_AB_Type.cu"
     fi
 done
-
-# Collect timings
-benchmarks=( $( find "$folder" -maxdepth 1 -mindepth 1 -type f | sed -nr 's|^.*/(.*)-20[0-9]{2}-[01][0-9]-[0-3][0-9]T.*|\1|p' | sort -u ) )
-for benchmark in "${benchmarks[@]}"; do
-    echo "===== $benchmark ====="
-    file=$( find "$folder" -maxdepth 1 -mindepth 1 -name "$benchmark-20[0-9][0-9]-[01][0-9]-*-kernels.log" )
-    timings=( $( sed -nr 's|^(t[A-Z].*) = [0-9.]*s$|\1|p' "$file" | sort -u ) )
-    for timing in "${timings[@]}"; do
-        values=( $( sed -nr 's|^'"$timing"' = ([0-9.]*)s$|\1|p' "$file" ) )
-        stats=( $( python3 -c '
-import sys, numpy as np
-x = np.array( sys.argv[1:], dtype=np.float64 )
-print( np.min(x), np.mean(x), np.std(x), np.max(x) )
-        ' ${values[@]} ) )
-        printf '% -9s = ' "$timing"
-        printf '% 8f ' ${values[@]}
-        printf '=> % 8f | % 8f +- % 8f | % 8f\n' ${stats[@]}
-    done
-done | tee "$folder/crawledTimings.txt"
-# sed -i 's|= .* => |=|' crawledTimings.txt # delete single measurements
-
-echo '' > "$folder/allCrawledKernelTimings.txt"
-for benchmark in "${benchmarks[@]}"; do
-    echo "===== $benchmark =====" | tee -a "$folder/allCrawledKernelTimings.txt"
-    file=$( find "$folder" -maxdepth 1 -mindepth 1 -name "$benchmark-20[0-9][0-9]-[01][0-9]-*-kernels.log" )
-    sed -n '/Profiling result:/,/infile/{ s|^infile[^\n]*||; p; }' "$file" >> "$folder/allCrawledKernelTimings.txt"
-    # only print the first result for the comparison file, the measurements are quite exact, as you can convince yoursef in "$benchmark-kernelTimings.txt"
-    sed -n '/Profiling result:/,/infile/{ /infile/{ s|^infile[^\n]*||; q; }; p; }' "$file"
-done | tee "$folder/crawledKernelTimings.txt"
