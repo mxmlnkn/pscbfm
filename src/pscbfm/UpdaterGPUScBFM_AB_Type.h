@@ -290,7 +290,7 @@ private:
      * I think I need AlignedMatrices for this, too :(
      */
     size_t mnMonomersPadded;
-    MirroredTexture< T_UCoordinatesCuda > * mPolymerSystemSorted;
+    MirroredVector< T_UCoordinatesCuda > * mPolymerSystemSorted;
     MirroredVector< T_UCoordinatesCuda > * mPolymerSystemSortedOld;
     MirroredVector< T_Coordinates      > * mviPolymerSystemSortedVirtualBox;
     /**
