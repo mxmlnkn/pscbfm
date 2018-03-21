@@ -930,8 +930,7 @@ namespace {
 template< typename T_UCoordinateCuda, class RNG, bool T_IsPeriodicX, bool T_IsPeriodicY, bool T_IsPeriodicZ >
 __global__ void kernelSimulationScBFMCheckSpecies
 (
-    typename CudaVec4< T_UCoordinateCuda >::value_type
-                const * const __restrict__ dpPolymerSystem         ,
+    cudaTextureObject_t const              dpPolymerSystem         ,
     T_Flags           * const              dpPolymerFlags          ,
     uint32_t            const              iOffset                 ,
     T_Lattice         * const __restrict__ dpLatticeTmp            ,
@@ -950,7 +949,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
     for ( auto iMonomer = blockIdx.x * blockDim.x + threadIdx.x;
           iMonomer < nMonomers; iMonomer += gridDim.x * blockDim.x, ++iGrid )
     {
-        auto const r0 = dpPolymerSystem[ iOffset + iMonomer ];
+        auto const r0 = tex1Dfetch< typename CudaVec4< T_UCoordinateCuda >::value_type >( dpPolymerSystem, iOffset + iMonomer );
         /* upcast int3 to int4 in preparation to use PTX SIMD instructions */
         //int4 const r0 = { r0Raw.x, r0Raw.y, r0Raw.z, 0 }; // not faster nor slower
         //select random direction. Own implementation of an rng :S? But I think it at least# was initialized using the LeMonADE RNG ...
@@ -1002,7 +1001,7 @@ __global__ void kernelSimulationScBFMCheckSpecies
             for ( auto iNeighbor = decltype( nNeighbors )(0); iNeighbor < nNeighbors; ++iNeighbor )
             {
                 auto const iGlobalNeighbor = dpNeighbors[ iNeighbor * rNeighborsPitchElements + iMonomer ];
-                auto const data2 = dpPolymerSystem[ iGlobalNeighbor ];
+                auto const data2 = tex1Dfetch< typename CudaVec4< T_UCoordinateCuda >::value_type >( dpPolymerSystem, iGlobalNeighbor );
                 if ( dpForbiddenBonds[ linearizeBondVectorIndex( data2.x - r1.x, data2.y - r1.y, data2.z - r1.z ) ] )
                 {
                     forbiddenBond = true;
@@ -2067,9 +2066,9 @@ template< typename T_UCoordinateCuda >
 void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::initializeSortedMonomerPositions( void )
 {
     /* sort groups into new array and save index mappings */
-    if ( mPolymerSystemSorted             == NULL )mPolymerSystemSorted             = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
-    if ( mPolymerSystemSortedOld          == NULL )mPolymerSystemSortedOld          = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
-    if ( mviPolymerSystemSortedVirtualBox == NULL )mviPolymerSystemSortedVirtualBox = new MirroredVector< T_Coordinates      >( mnMonomersPadded, mStream );
+    if ( mPolymerSystemSorted             == NULL ) mPolymerSystemSorted             = new MirroredTexture< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
+    if ( mPolymerSystemSortedOld          == NULL ) mPolymerSystemSortedOld          = new MirroredVector< T_UCoordinatesCuda >( mnMonomersPadded, mStream );
+    if ( mviPolymerSystemSortedVirtualBox == NULL ) mviPolymerSystemSortedVirtualBox = new MirroredVector< T_Coordinates      >( mnMonomersPadded, mStream );
     assert( mPolymerSystemSorted             != NULL );
     assert( mPolymerSystemSortedOld          != NULL );
     assert( mviPolymerSystemSortedVirtualBox != NULL );
@@ -3085,7 +3084,7 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::runSimulationOnGPU
             #define TMP_CALL_KERNEL_CHECK( RNG, SEED, SUBSEQ, STATE, PX, PY, PZ ) \
             kernelSimulationScBFMCheckSpecies< T_UCoordinateCuda, RNG, PX, PY, PZ > \
             <<< nBlocks, nThreads, 0, mStream >>>(                             \
-                mPolymerSystemSorted->gpu,                                     \
+                mPolymerSystemSorted->texture,                                 \
                 mPolymerFlags->gpu + mviSubGroupOffsets[ iSpecies ],           \
                 mviSubGroupOffsets[ iSpecies ],                                \
                 mLatticeTmp->gpu + iOffsetLatticeTmp,                          \
