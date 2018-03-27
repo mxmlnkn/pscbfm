@@ -53,7 +53,7 @@ public:
         mValue = x;
         double pow = 1;
         for ( size_t i = 0u; i < mMoments.size(); ++i, pow *= x )
-            mMoments[i] = pow;
+            mMoments[i] += pow;
         if ( mMoments[0] == 1 )
 			mMin = mMax = x;
 	}
@@ -190,7 +190,7 @@ inline void AnalyzerMsd< T_Ingredients >::getLinearPolymerSystemInfo( void )
         std::vector< uint32_t > viEndMonomers( 0 );
         std::stack< uint64_t > vToDo;
 
-        uint64_t nMonomersPerChain = 0;
+        uint64_t nMonomersPerChain = 1;
         vToDo.push( iMonomer );
         visited[ iMonomer ] = true;
 
@@ -235,10 +235,6 @@ inline void AnalyzerMsd< T_Ingredients >::getLinearPolymerSystemInfo( void )
         uint32_t iPrevMonomer   = iMiddleMonomer;
         for ( auto i = 0u; i < nMonomersPerChain / 2; ++i )
         {
-            /* with all the above checks, this should never happen, at least not for linear chains */
-            if ( molecules.getNumLinks( iMiddleMonomer ) < 2 )
-                throw std::runtime_error( "Unexpected end monomer encountered when iterating over the polymer to find the middle monomer." );
-
             if ( molecules.getNeighborIdx( iMiddleMonomer, 0 ) != iPrevMonomer )
             {
                 iPrevMonomer   = iMiddleMonomer;
@@ -249,6 +245,10 @@ inline void AnalyzerMsd< T_Ingredients >::getLinearPolymerSystemInfo( void )
                 iPrevMonomer   = iMiddleMonomer;
                 iMiddleMonomer = molecules.getNeighborIdx( iMiddleMonomer, 1 );
             }
+
+            /* with all the above checks, this should never happen, at least not for linear chains */
+            if ( molecules.getNumLinks( iMiddleMonomer ) < 2 )
+                throw std::runtime_error( "Unexpected end monomer encountered when iterating over the polymer to find the middle monomer." );
         }
 
         /* store results */
@@ -292,6 +292,9 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
 {
     auto const & molecules = mIngredients.getMolecules();
 
+    if ( molecules.getAge() % 100000 == 0 )
+        std::cout << "nMonomers = " << mIngredients.getMolecules().size() << " simulation is at step " << molecules.getAge() << std::endl;
+
     /* append the mean-square displacements to the ensemble averages */
     if ( molecules.getAge() - miMcsLastEvaluation < mDeltaTEvaluate )
         return true;
@@ -324,7 +327,7 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
             }
             else break;
         }
-        vChainCOMs /= (double) nMonomersInChain;
+        vChainCOMs[iChain] /= (double) nMonomersInChain;
         boxCOM += vChainCOMs[ iChain ];
     }
     boxCOM /= (double) mnChains;
@@ -353,11 +356,15 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
     /* calculate MSDs for all non-new subsequences */
     for ( size_t iSubsequence = 0u; iSubsequence < nSubsequences; ++iSubsequence )
     {
+
         auto const iEval = ( molecules.getAge() - mviFirstMcs.at( iSubsequence ) ) / mDeltaTEvaluate;
         if ( iEval >= mMSDs.size() )
         {
-            mMSDs.resize     ( iEval+1, std::vector< OnlineStatistics >( mnMSDs, OnlineStatistics() ) );
-            mEvalTimes.resize( iEval+1, 0 );
+            /* can't use resize, as it might invalidate the data! */
+            for ( size_t i = 0; iEval >= mMSDs.size(); ++i )
+                mMSDs.push_back( std::vector< OnlineStatistics >( mnMSDs, OnlineStatistics() ) );
+            for ( size_t i = 0; iEval >= mEvalTimes.size(); ++i )
+                mEvalTimes.push_back( 0 );
             mEvalTimes[ iEval ] = molecules.getAge() - mviFirstMcs.at( iSubsequence );
         }
 
@@ -370,21 +377,21 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
             /* MSDs of first, middle and end monomer */
             for ( auto j = 0u; j < mviEndMiddleMonomers[iChain].size(); ++j )
             {
-                auto const diff = (VectorDouble3) molecules[ mviEndMiddleMonomers[iChain][j] ]
-                                - mvFirstValues.back()[j][iChain];
+                auto diff = (VectorDouble3) molecules[ mviEndMiddleMonomers[iChain][j] ]
+                          - mvFirstValues.at( iSubsequence )[j][iChain];
                 if ( mnChains > 1 ) diff -= diffBoxCOM;
                 mMSDs.at( iEval ).at( j ).addValue( diff * diff );
             }
             /* MSD for chain COM */
             {
-                auto const diff = vChainCOMs[iChain] - mvFirstValues.back()[3][iChain];
+                auto diff = vChainCOMs[iChain] - mvFirstValues.at( iSubsequence )[3][iChain];
                 if ( mnChains > 1 ) diff -= diffBoxCOM;
                 mMSDs.at( iEval ).at( 3 ).addValue( diff * diff );
             }
             /* MSD for distance between middle monomer and COM */
             {
-                auto const diff = ( (VectorDouble3) molecules[ mviEndMiddleMonomers[iChain][1] ]
-                                - vChainCOMs[iChain] ) - mvFirstValues.back()[4][iChain];
+                auto diff = ( (VectorDouble3) molecules[ mviEndMiddleMonomers[iChain][1] ]
+                          - vChainCOMs[iChain] ) - mvFirstValues.at( iSubsequence )[4][iChain];
                 mMSDs.at( iEval ).at( 4 ).addValue( diff * diff );
             }
         }
@@ -426,8 +433,9 @@ inline void AnalyzerMsd< T_Ingredients >::cleanup()
         << "# iMcsLastRealization = "  << miMcsLastRealization << "\n"
         << "# deltaTEvaluate = "       << mDeltaTEvaluate      << "\n"
         << "# iMcsLastEvaluation = "   << miMcsLastEvaluation  << "\n"
+        << "# nSubsequences = "        << mvFirstValues.size() << "\n"
         << "# g1 to g5 are in this order the MSDs of: first monomer, middle monomer, end monomer, chain center of mass (COM), middle monomer - chain COM\n"
-        << "# dt g1 sg1 g2 sg2 g3 sg3 g4 sg4 g5 sg5 nSamples\n";
+        << "# dt nSamples g1 sg1 g2 sg2 g3 sg3 g4 sg4 g5 sg5\n";
     }
 
     for ( size_t iEval = 0; iEval < mMSDs.size(); ++iEval )
