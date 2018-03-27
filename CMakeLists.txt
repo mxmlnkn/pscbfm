@@ -144,7 +144,7 @@ target_link_libraries( findMaxNeighbors )
 # Declare include SYSTEM, in order to suppress C++11-induced warnings from
 # LeMonADE and Loki headers: warning:
 # ‘template<class> class std::auto_ptr’ is deprecated [-Wdeprecated-declarations]
-include_directories( SYSTEM ${LEMONADE_INCLUDE_DIR} )
+include_directories( SYSTEM ${LEMONADE_INCLUDE_DIR} ${PROJECT_SOURCE_DIR}/src )
 link_directories   (        ${LEMONADE_LIBRARY_DIR} )
 
 file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
