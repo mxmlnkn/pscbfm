@@ -174,6 +174,12 @@ int main( int argc, char ** argv )
         pUpdaterGpu->setGpu( iGpuToUse );
         if ( iRngToUse != -1 )
             pUpdaterGpu->setRng( iRngToUse );
+        pUpdaterGpu->  activate( "Benchmark" );
+        pUpdaterGpu->deactivate( "Check"     );
+        pUpdaterGpu->  activate( "Error"     );
+        pUpdaterGpu->  activate( "Info"      );
+        pUpdaterGpu->deactivate( "Stats"     );
+        pUpdaterGpu->deactivate( "Warning"   );
 
         TaskManager taskmanager;
         taskmanager.addUpdater( new UpdaterReadBfmFile<Ing>( infile, myIngredients,UpdaterReadBfmFile<Ing>::READ_LAST_CONFIG_SAVE ), 0 );

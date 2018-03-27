@@ -221,8 +221,10 @@ private:
         sizeof( T_UCoordinateCuda ) <= 2 &&
         ! std::is_signed< T_UCoordinateCuda >::value;
 
+public:
     SelectedLogger mLog;
 
+private:
     cudaStream_t mStream;
 
     RandomNumberGenerators randomNumbers;

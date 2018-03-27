@@ -1415,10 +1415,10 @@ UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::UpdaterGPUScBFM_AB_Type()
      * the output as "Info" log level
      */
     mLog.file( __FILENAME__ );
-    mLog.  activate( "Benchmark" );
+    mLog.deactivate( "Benchmark" );
     mLog.deactivate( "Check"     );
-    mLog.  activate( "Error"     );
-    mLog.  activate( "Info"      );
+    mLog.deactivate( "Error"     );
+    mLog.deactivate( "Info"      );
     mLog.deactivate( "Stats"     );
     mLog.deactivate( "Warning"   );
 }

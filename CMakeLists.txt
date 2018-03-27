@@ -147,13 +147,6 @@ target_link_libraries( findMaxNeighbors )
 include_directories( SYSTEM ${LEMONADE_INCLUDE_DIR} ${PROJECT_SOURCE_DIR}/src )
 link_directories   (        ${LEMONADE_LIBRARY_DIR} )
 
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
-add_executable( singleLinearChain ${SOURCE_FILES} )
-target_link_libraries( singleLinearChain ${LEMONADE_LIBRARY} cuda )
-
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
-add_executable( mainTestAll ${SOURCE_FILES} )
-target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
 find_package( CUDA REQUIRED )
 if( ${CUDA_VERSION_MAJOR} GREATER 7 )
@@ -239,17 +232,22 @@ message( " CMAKE_CXX_FLAGS         = ${CMAKE_CXX_FLAGS}" )
 message( " CMAKE_CXX_FLAGS_RELEASE = ${CMAKE_CXX_FLAGS_RELEASE}" )
 message( " CMAKE_CXX_FLAGS_DEBUG   = ${CMAKE_CXX_FLAGS_DEBUG}" )
 
+set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER} --compiler-options -Wall,-Wextra" )
+
+# make a library, because it compiles quite long after making the periodicity template arguments :(
+cuda_add_library( pscbfmUpdater
+    src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
+)
+target_link_libraries( pscbfmUpdater ${CUDA_curand_LIBRARY} cuda )
 
 # parallel Sc BFM
 set( BIN_NAME "pscbfm" )
 set( GPU_SOURCE_FOLDER "${CMAKE_BINARY_DIR}/gpu-sources/${BIN_NAME}" )
 file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
-set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER} --compiler-options -Wall,-Wextra" )
 cuda_add_executable( ${BIN_NAME}
-    src/pscbfm/UpdaterGPUScBFM_AB_Type.cu
     src/pscbfm/mainCUDASimulatorGPUScBFM_AB_Type.cpp
 )
-target_link_libraries( ${BIN_NAME} ${LEMONADE_LIBRARY} ${CUDA_curand_LIBRARY} cuda )
+target_link_libraries( ${BIN_NAME} pscbfmUpdater ${LEMONADE_LIBRARY} ${CUDA_curand_LIBRARY} cuda )
 
 
 # Bcc BFM
@@ -271,6 +269,15 @@ set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} )
 cuda_add_executable( gpuinfo src/gpuinfo.cpp )
 target_link_libraries( gpuinfo cuda )
 
+
+
+file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
+add_executable( singleLinearChain ${SOURCE_FILES} )
+target_link_libraries( singleLinearChain pscbfmUpdater ${LEMONADE_LIBRARY} cuda )
+
+file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
+add_executable( mainTestAll ${SOURCE_FILES} )
+target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
 
 
 ### Benchmarks:
@@ -301,9 +308,8 @@ if( BUILD_BENCHMARKS )
         file( MAKE_DIRECTORY "${GPU_SOURCE_FOLDER}" )
         set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} ${BENCHMARK_CUDA_NVCC_FLAGS} "--keep-dir=${GPU_SOURCE_FOLDER}" )
         cuda_add_executable( benchmark-${subdir}
-            "benchmarks/${subdir}/UpdaterGPUScBFM_AB_Type.cu"
             "benchmarks/${subdir}/mainCUDASimulatorGPUScBFM_AB_Type.cpp"
         )
-        target_link_libraries( benchmark-${subdir} ${LEMONADE_LIBRARY} ${CUDA_curand_LIBRARY} cuda )
+        target_link_libraries( benchmark-${subdir} pscbfmUpdater ${LEMONADE_LIBRARY} ${CUDA_curand_LIBRARY} cuda )
     endforeach()
 endif()
