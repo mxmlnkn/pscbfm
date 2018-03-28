@@ -99,30 +99,14 @@ int main( int argc, char ** argv )
 
             switch ( c )
             {
-                case 'e':
-                    seedFileName = std::string( optarg );
-                    break;
-                case 'h':
-                    printHelp();
-                    return 0;
-                case 'g':
-                    iGpuToUse = std::atoi( optarg );
-                    break;
-                case 'i':
-                    infile = std::string( optarg );
-                    break;
-                case 'm':
-                    max_mcs = std::atol( optarg );
-                    break;
-                case 'o':
-                    outfile = std::string( optarg );
-                    break;
-                case 'r':
-                    iRngToUse = std::atoi( optarg );
-                    break;
-                case 's':
-                    save_interval = std::atol( optarg );
-                    break;
+                case 'e': seedFileName  = std::string( optarg ); break;
+                case 'h': printHelp(); return 0;
+                case 'g': iGpuToUse     = std::atoi  ( optarg ); break;
+                case 'i': infile        = std::string( optarg ); break;
+                case 'm': max_mcs       = std::atol  ( optarg ); break;
+                case 'o': outfile       = std::string( optarg ); break;
+                case 'r': iRngToUse     = std::atoi  ( optarg ); break;
+                case 's': save_interval = std::atol  ( optarg ); break;
                 case 'v':
                     std::cout
                         << "Version compiled on " << __DATE__
@@ -174,12 +158,9 @@ int main( int argc, char ** argv )
         pUpdaterGpu->setGpu( iGpuToUse );
         if ( iRngToUse != -1 )
             pUpdaterGpu->setRng( iRngToUse );
-        pUpdaterGpu->  activate( "Benchmark" );
-        pUpdaterGpu->deactivate( "Check"     );
-        pUpdaterGpu->  activate( "Error"     );
-        pUpdaterGpu->  activate( "Info"      );
-        pUpdaterGpu->deactivate( "Stats"     );
-        pUpdaterGpu->deactivate( "Warning"   );
+        pUpdaterGpu->activateLogging( "Benchmark" );
+        pUpdaterGpu->activateLogging( "Error"     );
+        pUpdaterGpu->activateLogging( "Info"      );
 
         TaskManager taskmanager;
         taskmanager.addUpdater( new UpdaterReadBfmFile<Ing>( infile, myIngredients,UpdaterReadBfmFile<Ing>::READ_LAST_CONFIG_SAVE ), 0 );

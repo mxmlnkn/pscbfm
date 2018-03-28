@@ -86,12 +86,23 @@ public:
       mnSteps     ( rnSteps                        ),
       mLog        ( __FILENAME__                   )
     {
-        mLog.  activate( "Benchmark" );
+        mLog.deactivate( "Benchmark" );
         mLog.deactivate( "Check"     );
-        mLog.  activate( "Error"     );
-        mLog.  activate( "Info"      );
-        mLog.  activate( "Stat"      );
+        mLog.deactivate( "Error"     );
+        mLog.deactivate( "Info"      );
+        mLog.deactivate( "Stat"      );
         mLog.deactivate( "Warning"   );
+    }
+
+    inline void activateLogging( std::string const sLevel )
+    {
+        UpdaterGPUScBFM_AB_Type< uint8_t  > & updater1 = mUpdatersGpu;
+        UpdaterGPUScBFM_AB_Type< uint16_t > & updater2 = mUpdatersGpu;
+        UpdaterGPUScBFM_AB_Type< int32_t  > & updater3 = mUpdatersGpu;
+        updater1.mLog.activate( sLevel );
+        updater2.mLog.activate( sLevel );
+        updater3.mLog.activate( sLevel );
+        mLog.activate( sLevel );
     }
 
     inline void setGpu( int riGpuToUse ){ miGpuToUse = riGpuToUse; }

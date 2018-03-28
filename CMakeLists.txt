@@ -12,7 +12,7 @@ option( PULL_LEMONADE "If enabled LeMonADE will be downloaded and compiled in th
 option( BUILD_BENCHMARKS "If enabled possible tens of versions will be compiled in order to compare them" OFF )
 
 set( CMAKE_CXX_FLAGS "-Wall -Wextra" )
-set( CMAKE_CXX_FLAGS_RELEASE "-O3 -msse2 -mssse3 -fexpensive-optimizations -DNDEBUG" )
+set( CMAKE_CXX_FLAGS_RELEASE "-O3 -msse2 -mssse3 -fexpensive-optimizations -DNDEBUG -fopenmp" )
 set( CMAKE_CXX_FLAGS_DEBUG   "-g -O0" )
 message( "CUDA_HOST_COMPILER = ${CUDA_HOST_COMPILER}")
 if( CUDA_HOST_COMPILER )

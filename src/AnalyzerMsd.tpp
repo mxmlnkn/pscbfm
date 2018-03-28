@@ -154,9 +154,21 @@ public:
       mDeltaTEvaluate    ( rDeltaTEvaluate    ), /* in the future make this an argument and test that it works */
       miMcsLastEvaluation( -mDeltaTEvaluate   ), /* ensure that MCS = 0 can already be evaluated */
       msFilename         ( rFilename          )
-    {}
+    {
+        mvFirstValues      .reserve( rnMaxSubsequences );
+        mvFirstValuesBoxCOM.reserve( rnMaxSubsequences );
+        mviFirstMcs        .reserve( rnMaxSubsequences );
+    }
 
-    virtual ~AnalyzerMsd(){};
+    /* give a hint about the number of data points we will have in the end */
+    inline void reserve( unsigned long long int rnMcsMax )
+    {
+        auto const nEvalPoints = ( rnMcsMax + mDeltaTEvaluate - 1 )/ mDeltaTEvaluate;
+        mMSDs     .reserve( nEvalPoints );
+        mEvalTimes.reserve( nEvalPoints );
+    }
+
+    inline virtual ~AnalyzerMsd(){};
 
     inline virtual void initialize()
     {
@@ -303,7 +315,7 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
 
     /* Calculate box and chain COM. The other MSD values need no complex calculation */
     std::vector< VectorDouble3 > vChainCOMs( mnChains, VectorDouble3( 0,0,0 ) );
-    VectorDouble3 boxCOM( 0,0,0 );
+    //#pragma omp parallel for
     for ( uint32_t iChain = 0; iChain < mnChains; ++iChain )
     {
         /* iterate over chain monomers -> would make a nice iterator ... */
@@ -329,8 +341,11 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
             else break;
         }
         vChainCOMs[iChain] /= (double) nMonomersInChain;
-        boxCOM += vChainCOMs[ iChain ];
     }
+
+    VectorDouble3 boxCOM( 0,0,0 );
+    for ( uint32_t iChain = 0; iChain < mnChains; ++iChain )
+        boxCOM += vChainCOMs[ iChain ];
     boxCOM /= (double) mnChains;
 
     /* if enough time has passed since the last creation, then
@@ -354,10 +369,9 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
         mviFirstMcs.push_back( molecules.getAge() );
     }
 
-    /* calculate MSDs for all non-new subsequences */
+    /* Allocate enough space and save the time */
     for ( size_t iSubsequence = 0u; iSubsequence < nSubsequences; ++iSubsequence )
     {
-
         auto const iEval = ( molecules.getAge() - mviFirstMcs.at( iSubsequence ) ) / mDeltaTEvaluate;
         if ( iEval >= mMSDs.size() )
         {
@@ -368,11 +382,18 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
                 mEvalTimes.push_back( 0 );
             mEvalTimes[ iEval ] = molecules.getAge() - mviFirstMcs.at( iSubsequence );
         }
+    }
 
+    /* calculate MSDs for all non-new subsequences */
+    // can't parallelize this, because the addValue call is not thread-safe!
+    for ( size_t iSubsequence = 0u; iSubsequence < nSubsequences; ++iSubsequence )
+    {
+        auto const iEval = ( molecules.getAge() - mviFirstMcs.at( iSubsequence ) ) / mDeltaTEvaluate;
         /* if there are more than one chain, then we can subtract the change of the total center of mass, i.e., subtract the global fluctuations from the polymer fluctuations. For one chain the global fluctuation is equal to the polymer fluctuation and therefore would make everything we are interested in zero */
         auto const diffBoxCOM = boxCOM - mvFirstValuesBoxCOM.at( iSubsequence );
 
         /* this is basically already the ensemble averaging over each available chain */
+        //# pragma omp parallel for
         for ( uint32_t iChain = 0; iChain < mnChains; ++iChain )
         {
             /* MSDs of first, middle and end monomer */
