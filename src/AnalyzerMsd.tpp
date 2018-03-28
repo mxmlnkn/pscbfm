@@ -143,6 +143,7 @@ public:
         T_Ingredients          const & rIngredients      ,
         unsigned long long int const   rnMcsToSkip       ,
         unsigned long long int const   rDeltaTRealization,
+        unsigned long long int const   rDeltaTEvaluate   ,
         unsigned long long int const   rnMaxSubsequences ,
         std::string            const & rFilename
     )
@@ -150,7 +151,7 @@ public:
       mnChains           ( 0                  ),
       mnMcsToSkip        ( rnMcsToSkip        ),
       mDeltaTRealization ( rDeltaTRealization ),
-      mDeltaTEvaluate    ( rDeltaTRealization ), /* in the future make this an argument and test that it works */
+      mDeltaTEvaluate    ( rDeltaTEvaluate    ), /* in the future make this an argument and test that it works */
       miMcsLastEvaluation( -mDeltaTEvaluate   ), /* ensure that MCS = 0 can already be evaluated */
       msFilename         ( rFilename          )
     {}
@@ -398,17 +399,10 @@ inline bool AnalyzerMsd< T_Ingredients >::execute()
     }
 }
 
-struct PathSeparator
-{
-    bool operator()( char ch ) const
-    {
-        return ch == '\\' || ch == '/';
-    }
-};
-
 template< class T_Ingredients >
 inline void AnalyzerMsd< T_Ingredients >::cleanup()
 {
+    std::cerr << "[AnalyzerMsd::cleanup]\n";
     std::ofstream file( msFilename, std::ios::out );
 
     {

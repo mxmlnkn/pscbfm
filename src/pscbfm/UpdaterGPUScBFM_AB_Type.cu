@@ -3495,7 +3495,8 @@ void UpdaterGPUScBFM_AB_Type< T_UCoordinateCuda >::cleanup()
 {
     this->destruct();
 
-    cudaStreamDestroy( mStreamXorwow );
+    if ( miRngToUse == Rng::Xorwow )
+        cudaStreamDestroy( mStreamXorwow );
     cudaDeviceSynchronize();
     cudaProfilerStop();
 }
