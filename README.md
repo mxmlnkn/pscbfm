@@ -48,7 +48,7 @@ See also `benchmarkK80.pbs`. Most options are optional: on a system without the 
 
 ## Compilation of graphColoring.h fails:
 
-    /sw/taurus/libraries/cuda/7.0.28/bin/nvcc ~/mt-progwork/src/pscBFMLegacy/UpdaterGPUScBFM_AB_Type.cu -c -o ~/mt-progwork/build/CMakeFiles/SimulatorCUDAGPUScBFM_AB_Type.dir/src/pscBFMLegacy/./SimulatorCUDAGPUScBFM_AB_Type_generated_UpdaterGPUScBFM_AB_Type.cu.o -ccbin /sw/global/compilers/gcc/4.9.1/bin/gcc -m64 -Xcompiler ,\"-Wall\",\"-Wextra\",\"-O3\",\"-msse2\",\"-mssse3\",\"-fexpensive-optimizations\",\"-DNDEBUG\" -std=c++11 -lineinfo -gencode arch=compute_35,code=sm_35 -Xcompiler -fPIC -DNVCC -I/sw/taurus/libraries/cuda/7.0.28/include -I~/mt-progwork/extern/LeMonADE/include -I/sw/taurus/libraries/cuda/7.0.28/include
+    /sw/taurus/libr aries/cuda/7.0.28/bin/nvcc ~/mt-progwork/src/pscBFMLegacy/UpdaterGPUScBFM_AB_Type.cu -c -o ~/mt-progwork/build/CMakeFiles/SimulatorCUDAGPUScBFM_AB_Type.dir/src/pscBFMLegacy/./SimulatorCUDAGPUScBFM_AB_Type_generated_UpdaterGPUScBFM_AB_Type.cu.o -ccbin /sw/global/compilers/gcc/4.9.1/bin/gcc -m64 -Xcompiler ,\"-Wall\",\"-Wextra\",\"-O3\",\"-msse2\",\"-mssse3\",\"-fexpensive-optimizations\",\"-DNDEBUG\" -std=c++11 -lineinfo -gencode arch=compute_35,code=sm_35 -Xcompiler -fPIC -DNVCC -I/sw/taurus/libraries/cuda/7.0.28/include -I~/mt-progwork/extern/LeMonADE/include -I/sw/taurus/libraries/cuda/7.0.28/include
     ~/mt-progwork/src/pscBFMLegacy/graphColoring.h:19:17: error: default argument for template parameter for class enclosing ‘<lambda>’
              []( T_Neighbors const & x, T_Id const & i ){ return x[i].size(); },
                      ^
@@ -68,3 +68,16 @@ See also `benchmarkK80.pbs`. Most options are optional: on a system without the 
 
  - Remake LeMonADE with the current compiler version: `cd extern/LeMonADE/; rm -r build; mkdir build; cd build; cmake -DINSTALLDIR_LEMONADE=.. DCMAKE_INSTALL_PREFIX=.. ..; make install`
  - You can also just delete the built library and call cmake again to let it rebuild LeMonADE automatically as long as the `PULL_LEMONADE` option is set to `ON`: `rm ../extern/LeMonADE/lib/libLeMonADE.a; cmake ..`
+
+## Call of overloaded swap is ambiguous
+
+    In file included from /sw/global/compilers/gcc/5.3.0/include/c++/5.3.0/deque:64:0,
+                     from /sw/global/compilers/gcc/5.3.0/include/c++/5.3.0/stack:60,
+                     from /home/user/progwork/src/AnalyzerMsd.tpp:7,
+                     from /home/user/progwork/src/singleLinearChain/main.cpp:38:
+    /sw/global/compilers/gcc/5.3.0/include/c++/5.3.0/bits/stl_deque.h:579:8: error: call of overloaded ‘swap(std::_Deque_base<GraphIteratorDepthFirst<Molecules<Loki::GenLinearHierarchy<Loki::Typelist<MonomerAttributeTag, Loki::NullType>, FeatureHolder, Vector3D<int> >, 7u, int>, alwaysTrue>::IteratorPosition, std::allocator<GraphIteratorDepthFirst<Molecules<Loki::GenLinearHierarchy<Loki::Typelist<MonomerAttributeTag, Loki::NullType>, FeatureHolder, Vector3D<int> >, 7u, int>, alwaysTrue>::IteratorPosition> >::iterator&, std::_Deque_base<GraphIteratorDepthFirst<Molecules<Loki::GenLinearHierarchy<Loki::Typelist<MonomerAttributeTag, Loki::NullType>, FeatureHolder, Vector3D<int> >, 7u, int>, alwaysTrue>::IteratorPosition, std::allocator<GraphIteratorDepthFirst<Molecules<Loki::GenLinearHierarchy<Loki::Typelist<MonomerAttributeTag, Loki::NullType>, FeatureHolder, Vector3D<int> >, 7u, int>, alwaysTrue>::IteratorPosition> >::iterator&)’ is ambiguous
+        swap(this->_M_finish, __x._M_finish);
+
+### Workaround
+
+    Try to use `-D__STL_CONFIG_H`
