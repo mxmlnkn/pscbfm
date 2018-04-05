@@ -1276,8 +1276,9 @@ inline void getCudaDeviceProperties
         printf( "| PCI Device ID            : %i\n"        , prop->pciDeviceID );
         printf( "| PCI Domain ID            : %i\n"        , prop->pciDomainID );
         printf( "|------------------- Architecture -------------------\n" );
-        printf( "| Number of SMX            : %i\n"        , prop->multiProcessorCount );
-        printf( "| Max Threads per SMX      : %i\n"        , prop->maxThreadsPerMultiProcessor );
+        printf( "| Number of MP             : %i\n"        , prop->multiProcessorCount );
+        printf( "| Max Threads per MP       : %i\n"        , prop->maxThreadsPerMultiProcessor );
+        printf( "| Max Blocks per MP        : %i\n"        , prop->major == 3 ? 16 : ( prop->major <= 7 ? 32 : -1 ) );
         printf( "| Max Threads per Block    : %i\n"        , prop->maxThreadsPerBlock );
         printf( "| Warp Size                : %i\n"        , prop->warpSize );
         printf( "| Warp Schedulers per MP   : %i\n"        , getWarpSchedulersPerMultiprocessor( prop->major, prop->minor ) );
@@ -1290,7 +1291,7 @@ inline void getCudaDeviceProperties
                                                              prop->maxGridSize[2] );
         printf( "|  => Max conc. Threads    : %i\n"        , prop->multiProcessorCount *
                                                              prop->maxThreadsPerMultiProcessor );
-        printf( "|  => Warps per SMX        : %i\n"        , ( prop->warpSize == 0 ? -1 : prop->maxThreadsPerMultiProcessor / prop->warpSize ) );
+        printf( "|  => Warps per MP         : %i\n"        , ( prop->warpSize == 0 ? -1 : prop->maxThreadsPerMultiProcessor / prop->warpSize ) );
         printf( "| CUDA Cores per Multiproc.: %i\n"        , coresPerSM );
         printf( "| Total CUDA Cores         : %i\n"        , prop->multiProcessorCount * coresPerSM );
         printf( "| Peak SP-FLOPS            : %f GFLOPS\n" , getCudaPeakSPFlops( *prop ) / 1e9f );
@@ -1323,6 +1324,7 @@ inline void getCudaDeviceProperties
                                                              prop->maxTexture3D[2] );
         printf( "| Cache Configuration      : %s\n"        , getCudaCacheConfigString().c_str() );
         printf( "| Shared Memory Bank Size  : %s\n"        , getCudaSharedMemBankSizeString().c_str() );
+        printf( "| Shared Memory Banks      : %i\n"        , prop->major >= 3 && prop->major <= 7 ? 32 : -1 );
         printf( "|--------------------- Graphics ---------------------\n" );
         printf( "| Compute mode             : %s\n"        ,      computeModeString );
         printf( "|---------------------- Other -----------------------\n" );
