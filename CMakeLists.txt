@@ -136,8 +136,10 @@ else()
 endif()
 
 include_directories( "extern/" ) # Fundamental
-add_executable( findMaxNeighbors ../src/findMaxNeighbors.cpp )
-target_link_libraries( findMaxNeighbors )
+if ( EXISTS ${PROJECT_SOURCE_DIR}/src/findMaxNeighbors.cpp )
+    add_executable( findMaxNeighbors ${PROJECT_SOURCE_DIR}/src/findMaxNeighbors.cpp )
+    target_link_libraries( findMaxNeighbors )
+endif()
 # Might wanna link statically: https://stackoverflow.com/questions/38694058/cmake-linking-statically-against-libgcc-and-libstdc-into-a-shared-library?rq=1
 
 
@@ -259,26 +261,30 @@ target_link_libraries( ${BIN_NAME} pscbfmUpdater ${LEMONADE_LIBRARY} ${CUDA_cura
 
 
 # CLI for coloring a BFM file
-add_executable( colorBFM src/pscbfm/mainColorBFM.cpp )
-target_link_libraries( colorBFM ${LEMONADE_LIBRARY} cuda )
-
+if ( EXISTS ${PROJECT_SOURCE_DIR}/src/pscbfm/mainColorBFM.cpp )
+    add_executable( colorBFM ${PROJECT_SOURCE_DIR}/src/pscbfm/mainColorBFM.cpp )
+    target_link_libraries( colorBFM ${LEMONADE_LIBRARY} cuda )
+endif()
 
 # minimalistic gpuinfo tool printing all properties
-set_source_files_properties( src/gpuinfo.cpp PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
-set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} )
-cuda_add_executable( gpuinfo src/gpuinfo.cpp )
-target_link_libraries( gpuinfo cuda )
+if ( EXISTS ${PROJECT_SOURCE_DIR}/src/gpuinfo.cpp )
+    set_source_files_properties( ${PROJECT_SOURCE_DIR}/src/gpuinfo.cpp PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
+    set( CUDA_NVCC_FLAGS ${MINIMAL_CUDA_NVCC_FLAGS} )
+    cuda_add_executable( gpuinfo ${PROJECT_SOURCE_DIR}/src/gpuinfo.cpp )
+    target_link_libraries( gpuinfo cuda )
+endif()
 
+if ( EXISTS ${PROJECT_SOURCE_DIR}/src/singleLinearChain/main.cpp )
+    file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
+    add_executable( singleLinearChain ${SOURCE_FILES} )
+    target_link_libraries( singleLinearChain pscbfmUpdater ${LEMONADE_LIBRARY} cuda )
+endif()
 
-
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/src/singleLinearChain/*.cpp )
-add_executable( singleLinearChain ${SOURCE_FILES} )
-target_link_libraries( singleLinearChain pscbfmUpdater ${LEMONADE_LIBRARY} cuda )
-
-file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
-add_executable( mainTestAll ${SOURCE_FILES} )
-target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
-
+if( EXISTS ${PROJECT_SOURCE_DIR}/tests/mainTestAll.cpp )
+    file( GLOB SOURCE_FILES ${PROJECT_SOURCE_DIR}/tests/*.cpp )
+    add_executable( mainTestAll ${SOURCE_FILES} )
+    target_link_libraries( mainTestAll ${LEMONADE_LIBRARY} )
+endif()
 
 ### Benchmarks:
 
